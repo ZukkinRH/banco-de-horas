@@ -1130,12 +1130,15 @@ const EmailModule = (function(){
     // "text/plain" por padrão, o que evita o preflight OPTIONS — o Google
     // Apps Script (e a maioria dos serviços simples de webhook) não lida
     // bem com esse preflight. O servidor faz JSON.parse do corpo mesmo assim.
+    // mode:'no-cors' de propósito: o Apps Script responde com um redirect
+    // 302 para uma URL de echo que não é legível via fetch comum (CORS),
+    // mesmo quando o envio do e-mail é concluído com sucesso no servidor.
+    // Em modo no-cors o navegador não bloqueia a chamada por isso, mas a
+    // resposta fica opaca — não há como ler {ok:true/false} de volta, então
+    // tratamos qualquer chamada que não lance erro de rede como sucesso.
     return fetch(Data.APP_CONFIG.powerAutomateUrl, {
-      method:'POST', body: JSON.stringify(payload)
-    }).then(resp => {
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      return {ok:true};
-    }).catch(err => Promise.reject({
+      method:'POST', mode:'no-cors', body: JSON.stringify(payload)
+    }).then(() => ({ok:true})).catch(err => Promise.reject({
       ok:false, integrado:true,
       mensagem:'Falha ao chamar o serviço de envio: ' + (err && err.message ? err.message : err)
     }));
