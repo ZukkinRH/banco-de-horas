@@ -1,0 +1,2303 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Banco de Horas — Zukkin</title>
+
+<!-- Chart.js (gráficos) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
+<!-- SheetJS (lê o .xlsx exportado da planilha do Google Sheets, direto no navegador) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- Firebase (banco de dados real — Firestore — e autenticação anônima, sem tela de login) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+
+<style>
+/* ==========================================================================
+   DESIGN TOKENS — paleta corporativa Zukkin (cinzas + pastéis + vermelho sutil)
+   ========================================================================== */
+:root{
+  color-scheme: light;
+  --white:#ffffff;
+  --gray-50:#f7f7f8;
+  --gray-100:#eef0f2;
+  --gray-150:#e6e8eb;
+  --gray-200:#dde0e3;
+  --gray-300:#c7cbd1;
+  --gray-400:#a3a9b2;
+  --gray-500:#7c828c;
+  --gray-600:#585e67;
+  --gray-700:#3c4148;
+  --gray-800:#26292e;
+  --gray-900:#17191c;
+
+  --red-zukkin:#c8102e;
+  --red-zukkin-dark:#9c0c23;
+  --red-soft:#f6d9de;
+
+  --pastel-green-bg:#e2f3e8;
+  --pastel-green-text:#2f7d54;
+  --pastel-amber-bg:#fbf1d9;
+  --pastel-amber-text:#a4761f;
+  --pastel-red-bg:#f9e2e3;
+  --pastel-red-text:#b23a3f;
+  --pastel-gray-bg:#eceef0;
+  --pastel-gray-text:#5b6069;
+
+  --radius-sm:8px;
+  --radius-md:14px;
+  --radius-lg:20px;
+  --shadow-sm:0 1px 2px rgba(23,25,28,0.04), 0 1px 1px rgba(23,25,28,0.03);
+  --shadow-md:0 4px 16px rgba(23,25,28,0.06);
+  --sidebar-w:250px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:var(--font);
+  background:var(--gray-50);
+  color:var(--gray-800);
+  font-size:14px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4,p,ul{margin:0;}
+a{color:inherit;text-decoration:none;}
+button{font-family:inherit;cursor:pointer;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--gray-300);border-radius:8px;}
+
+/* ==========================================================================
+   LAYOUT GERAL
+   ========================================================================== */
+#app{display:flex;min-height:100vh;}
+
+/* ---- Sidebar ---- */
+.sidebar{
+  width:var(--sidebar-w);
+  flex-shrink:0;
+  background:var(--gray-900);
+  color:var(--gray-300);
+  display:flex;
+  flex-direction:column;
+  position:fixed;
+  top:0;left:0;bottom:0;
+  z-index:40;
+}
+.sidebar-brand{
+  padding:22px 22px 18px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  border-bottom:1px solid rgba(255,255,255,0.08);
+}
+.sidebar-brand .mark{
+  width:30px;height:30px;border-radius:8px;
+  background:var(--red-zukkin);
+  display:flex;align-items:center;justify-content:center;
+  font-weight:700;color:#fff;font-size:14px;
+}
+.sidebar-brand .txt{font-weight:600;color:#fff;font-size:15px;letter-spacing:.3px;}
+.sidebar-brand .txt small{display:block;font-weight:400;color:var(--gray-400);font-size:11px;letter-spacing:.4px;}
+
+.nav-group{padding:14px 10px;}
+.nav-label{
+  padding:8px 12px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--gray-500);font-weight:600;
+}
+.nav-item{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 12px;margin:1px 0;border-radius:var(--radius-sm);
+  font-size:13.5px;color:var(--gray-300);
+  cursor:pointer;transition:background .12s, color .12s;
+  white-space:nowrap;
+}
+.nav-item .ic{width:17px;text-align:center;flex-shrink:0;opacity:.85;font-size:14px;}
+.nav-item:hover{background:rgba(255,255,255,0.06);color:#fff;}
+.nav-item.active{background:rgba(200,16,46,0.18);color:#fff;}
+.nav-item.active .ic{opacity:1;}
+.sidebar-foot{
+  margin-top:auto;padding:16px 20px;font-size:11px;color:var(--gray-500);
+  border-top:1px solid rgba(255,255,255,0.08);
+}
+
+/* ---- Main / topbar ---- */
+.main{margin-left:var(--sidebar-w);flex:1;display:flex;flex-direction:column;min-width:0;}
+.topbar{
+  height:72px;flex-shrink:0;
+  background:var(--white);
+  border-bottom:1px solid var(--gray-150);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 28px;position:sticky;top:0;z-index:30;
+}
+.topbar-left h1{font-size:17px;font-weight:700;color:var(--gray-900);}
+.topbar-meta{display:flex;gap:18px;margin-top:2px;font-size:11.5px;color:var(--gray-500);}
+.topbar-meta b{color:var(--gray-700);font-weight:600;}
+.topbar-right{display:flex;align-items:center;gap:16px;}
+.week-select{
+  border:1px solid var(--gray-200);background:var(--gray-50);border-radius:var(--radius-sm);
+  padding:7px 10px;font-size:12.5px;color:var(--gray-700);font-weight:500;
+}
+.logo-zukkin{
+  background:var(--gray-900);color:#fff;font-weight:800;letter-spacing:1px;
+  font-size:14px;padding:9px 14px;border-radius:var(--radius-sm);
+}
+
+.view-wrap{padding:26px 28px 60px;flex:1;}
+.view{display:none;}
+.view.active{display:block;}
+
+/* ==========================================================================
+   COMPONENTES
+   ========================================================================== */
+.grid{display:grid;gap:16px;}
+.grid-cards{grid-template-columns:repeat(4,1fr);}
+.grid-2{grid-template-columns:1fr 1fr;}
+.grid-charts{grid-template-columns:repeat(2,1fr);}
+
+.card{
+  background:var(--white);border:1px solid var(--gray-150);border-radius:var(--radius-md);
+  padding:18px 20px;box-shadow:var(--shadow-sm);
+}
+.card h3{font-size:12.5px;color:var(--gray-500);font-weight:600;text-transform:uppercase;letter-spacing:.4px;}
+.card .kpi{font-size:26px;font-weight:700;color:var(--gray-900);margin-top:8px;}
+.card .kpi-sub{font-size:12px;color:var(--gray-500);margin-top:4px;}
+.card.accent-red{border-top:3px solid var(--red-zukkin);}
+.card.accent-green .kpi{color:var(--pastel-green-text);}
+.card.accent-red .kpi{color:var(--pastel-red-text);}
+
+.section-title{display:flex;align-items:center;justify-content:space-between;margin:30px 0 14px;}
+.section-title h2{font-size:15.5px;font-weight:700;color:var(--gray-900);}
+.section-title .hint{font-size:12px;color:var(--gray-500);}
+
+.panel{background:var(--white);border:1px solid var(--gray-150);border-radius:var(--radius-md);box-shadow:var(--shadow-sm);overflow:hidden;}
+.panel-head{padding:16px 20px;border-bottom:1px solid var(--gray-150);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+.panel-head h3{font-size:14px;font-weight:700;color:var(--gray-900);}
+.panel-body{padding:18px 20px;}
+
+.chart-box{height:260px;position:relative;}
+.chart-card{padding:16px 20px 20px;}
+
+/* Badges de situação */
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap;}
+.badge::before{content:'';width:6px;height:6px;border-radius:50%;}
+.badge-positivo{background:var(--pastel-green-bg);color:var(--pastel-green-text);}
+.badge-positivo::before{background:var(--pastel-green-text);}
+.badge-atencao{background:var(--pastel-amber-bg);color:var(--pastel-amber-text);}
+.badge-atencao::before{background:var(--pastel-amber-text);}
+.badge-negativo{background:var(--pastel-red-bg);color:var(--pastel-red-text);}
+.badge-negativo::before{background:var(--pastel-red-text);}
+.badge-zerado{background:var(--pastel-gray-bg);color:var(--pastel-gray-text);}
+.badge-zerado::before{background:var(--pastel-gray-text);}
+
+.var-up{color:var(--pastel-green-text);font-weight:600;}
+.var-down{color:var(--pastel-red-text);font-weight:600;}
+.var-flat{color:var(--gray-500);font-weight:600;}
+
+/* Filtros */
+.filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.filters select, .filters input[type="text"]{
+  border:1px solid var(--gray-200);background:var(--gray-50);border-radius:var(--radius-sm);
+  padding:8px 10px;font-size:12.5px;color:var(--gray-700);min-width:130px;
+}
+.filters .search-box{position:relative;}
+.filters .search-box input{padding-left:30px;min-width:200px;}
+.filters .search-box .ic{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray-400);font-size:12px;}
+.btn-clear-filters{border:none;background:none;color:var(--gray-500);font-size:12px;text-decoration:underline;}
+
+/* Tabelas */
+table.data-table{width:100%;border-collapse:collapse;font-size:13px;}
+table.data-table thead th{
+  position:sticky;top:0;background:var(--gray-50);color:var(--gray-600);
+  text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.3px;
+  padding:10px 14px;border-bottom:1px solid var(--gray-150);cursor:pointer;user-select:none;white-space:nowrap;
+}
+table.data-table thead th .sort-ic{opacity:.4;font-size:10px;margin-left:4px;}
+table.data-table tbody td{padding:11px 14px;border-bottom:1px solid var(--gray-100);color:var(--gray-800);}
+table.data-table tbody tr{cursor:pointer;transition:background .1s;}
+table.data-table tbody tr:hover{background:var(--gray-50);}
+table.data-table tbody tr:last-child td{border-bottom:none;}
+.table-scroll{max-height:480px;overflow:auto;}
+.table-empty{padding:40px 20px;text-align:center;color:var(--gray-500);font-size:13px;}
+.pagination{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--gray-150);}
+.pagination button{border:1px solid var(--gray-200);background:var(--white);border-radius:var(--radius-sm);padding:5px 10px;font-size:12px;color:var(--gray-600);}
+.pagination button:disabled{opacity:.4;cursor:default;}
+.pagination .pg-info{font-size:12px;color:var(--gray-500);}
+
+/* Ranking bars */
+.rank-row{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:12.5px;}
+.rank-row .rank-name{width:150px;flex-shrink:0;color:var(--gray-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rank-row .rank-bar-wrap{flex:1;background:var(--gray-100);border-radius:6px;height:8px;overflow:hidden;}
+.rank-row .rank-bar{height:100%;border-radius:6px;}
+.rank-row .rank-val{width:64px;text-align:right;font-weight:600;flex-shrink:0;}
+
+/* Alertas / pontos de atenção */
+.alert-item{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--gray-100);}
+.alert-item:last-child{border-bottom:none;}
+.alert-dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex-shrink:0;background:var(--pastel-red-text);}
+.alert-dot.mid{background:var(--pastel-amber-text);}
+.alert-title{font-size:13px;font-weight:600;color:var(--gray-800);}
+.alert-desc{font-size:12px;color:var(--gray-500);margin-top:2px;}
+
+/* Botões */
+.btn{border-radius:var(--radius-sm);padding:9px 16px;font-size:13px;font-weight:600;border:1px solid transparent;display:inline-flex;align-items:center;gap:7px;}
+.btn-primary{background:var(--gray-900);color:#fff;}
+.btn-primary:hover{background:var(--gray-800);}
+.btn-outline{background:var(--white);border:1px solid var(--gray-200);color:var(--gray-700);}
+.btn-outline:hover{background:var(--gray-50);}
+.btn-red{background:var(--red-zukkin);color:#fff;}
+.btn-red:hover{background:var(--red-zukkin-dark);}
+.btn-sm{padding:6px 11px;font-size:12px;}
+.btn:disabled{opacity:.5;cursor:default;}
+
+/* Tabs internas (setor / relatorios) */
+.subtabs{display:flex;gap:4px;background:var(--gray-100);padding:4px;border-radius:var(--radius-sm);width:fit-content;margin-bottom:16px;flex-wrap:wrap;}
+.subtab{padding:7px 14px;font-size:12.5px;font-weight:600;color:var(--gray-600);border-radius:6px;cursor:pointer;}
+.subtab.active{background:var(--white);color:var(--gray-900);box-shadow:var(--shadow-sm);}
+
+/* Modal */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(23,25,28,0.45);
+  display:none;align-items:center;justify-content:center;z-index:100;padding:24px;
+}
+.modal-overlay.open{display:flex;}
+.modal-box{
+  background:var(--white);border-radius:var(--radius-lg);max-width:880px;width:100%;
+  max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,0.25);
+}
+.modal-head{padding:20px 24px;border-bottom:1px solid var(--gray-150);display:flex;align-items:flex-start;justify-content:space-between;position:sticky;top:0;background:var(--white);}
+.modal-head h2{font-size:16px;font-weight:700;color:var(--gray-900);}
+.modal-head .sub{font-size:12px;color:var(--gray-500);margin-top:3px;}
+.modal-close{border:none;background:var(--gray-100);width:30px;height:30px;border-radius:50%;color:var(--gray-600);font-size:14px;}
+.modal-body{padding:22px 24px;}
+
+/* Toast / estados */
+.toast-wrap{position:fixed;bottom:22px;right:22px;z-index:200;display:flex;flex-direction:column;gap:8px;}
+.toast{
+  background:var(--gray-900);color:#fff;padding:12px 16px;border-radius:var(--radius-sm);
+  font-size:13px;box-shadow:var(--shadow-md);min-width:260px;display:flex;gap:10px;align-items:flex-start;
+  animation:toastIn .18s ease-out;
+}
+.toast.success{background:#265c43;}
+.toast.error{background:#7a2b2b;}
+.toast.info{background:var(--gray-700);}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+.banner{border-radius:var(--radius-sm);padding:12px 16px;font-size:12.5px;display:flex;gap:10px;align-items:flex-start;margin-bottom:16px;}
+.banner-info{background:var(--pastel-gray-bg);color:var(--pastel-gray-text);}
+.banner-warn{background:var(--pastel-amber-bg);color:var(--pastel-amber-text);}
+
+.loading-state, .empty-state, .error-state{padding:50px 20px;text-align:center;color:var(--gray-500);font-size:13px;}
+.spinner{width:22px;height:22px;border-radius:50%;border:2.5px solid var(--gray-200);border-top-color:var(--red-zukkin);animation:spin .7s linear infinite;margin:0 auto 10px;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+.evo-line{display:flex;align-items:baseline;gap:10px;}
+.evo-line .big{font-size:22px;font-weight:700;}
+
+.email-card{border:1px solid var(--gray-150);border-radius:var(--radius-md);padding:18px 20px;background:var(--white);}
+.email-card h4{font-size:13.5px;font-weight:700;color:var(--gray-900);margin-bottom:10px;}
+.field-row{margin-bottom:10px;}
+.field-row label{display:block;font-size:11.5px;color:var(--gray-500);margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;}
+.field-row input{width:100%;border:1px solid var(--gray-200);border-radius:var(--radius-sm);padding:8px 10px;font-size:13px;color:var(--gray-800);}
+.chip-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}
+.chip{background:var(--gray-100);color:var(--gray-700);font-size:11.5px;padding:4px 9px;border-radius:999px;display:flex;align-items:center;gap:6px;}
+.chip button{border:none;background:none;color:var(--gray-500);font-size:11px;}
+
+.report-preview{border:1px solid var(--gray-150);border-radius:var(--radius-md);overflow:hidden;}
+.report-header{background:var(--gray-900);color:#fff;padding:20px 24px;}
+.report-header .brand{font-weight:800;letter-spacing:1.5px;font-size:13px;color:var(--red-soft);}
+.report-header h2{font-size:17px;margin-top:6px;}
+.report-header .meta{font-size:12px;color:var(--gray-300);margin-top:4px;}
+.report-body{padding:20px 24px;}
+.report-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px;}
+.report-summary div{background:var(--gray-50);border-radius:var(--radius-sm);padding:12px;text-align:center;}
+.report-summary .lbl{font-size:11px;color:var(--gray-500);}
+.report-summary .val{font-size:16px;font-weight:700;color:var(--gray-900);margin-top:3px;}
+.report-note{margin-top:18px;padding:14px 16px;background:var(--pastel-amber-bg);border-radius:var(--radius-sm);font-size:12.5px;color:var(--pastel-amber-text);}
+
+.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+
+/* ==========================================================================
+   RESPONSIVIDADE
+   ========================================================================== */
+@media (max-width: 1180px){
+  .grid-cards{grid-template-columns:repeat(2,1fr);}
+  .grid-charts{grid-template-columns:1fr;}
+  .grid-2{grid-template-columns:1fr;}
+  .config-grid{grid-template-columns:1fr;}
+  .report-summary{grid-template-columns:repeat(2,1fr);}
+}
+@media (max-width: 900px){
+  .sidebar{width:74px;}
+  .sidebar-brand .txt, .nav-label, .nav-item span.lbl{display:none;}
+  .sidebar-brand{justify-content:center;padding:20px 0;}
+  .nav-item{justify-content:center;}
+  .main{margin-left:74px;}
+  .topbar{padding:0 16px;}
+  .view-wrap{padding:18px 14px 50px;}
+  .grid-cards{grid-template-columns:1fr 1fr;}
+}
+@media (max-width:600px){
+  .grid-cards{grid-template-columns:1fr;}
+  .topbar-meta{display:none;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============================================================
+       SIDEBAR — navegação principal
+       ============================================================ -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="mark">Z</div>
+      <div class="txt">Zukkin<small>Banco de Horas</small></div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Visão geral</div>
+      <div class="nav-item" data-nav="dashboard"><span class="ic">&#9632;</span><span class="lbl">Dashboard</span></div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Setores</div>
+      <div class="nav-item" data-nav="setor" data-setor="Qualidade"><span class="ic">&#9679;</span><span class="lbl">Qualidade</span></div>
+      <div class="nav-item" data-nav="setor" data-setor="Operações"><span class="ic">&#9679;</span><span class="lbl">Operações</span></div>
+      <div class="nav-item" data-nav="setor" data-setor="Projetos"><span class="ic">&#9679;</span><span class="lbl">Projetos</span></div>
+      <div class="nav-item" data-nav="setor" data-setor="RH"><span class="ic">&#9679;</span><span class="lbl">RH</span></div>
+      <div class="nav-item" data-nav="setor" data-setor="Desenvolvimento"><span class="ic">&#9679;</span><span class="lbl">Desenvolvimento</span></div>
+      <div class="nav-item" data-nav="setor" data-setor="Zpromo"><span class="ic">&#9679;</span><span class="lbl">Zpromo</span></div>
+      <div class="nav-item" data-nav="setor" data-setor="Zrobot"><span class="ic">&#9679;</span><span class="lbl">Zrobot</span></div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Gestão</div>
+      <div class="nav-item" data-nav="historico"><span class="ic">&#9202;</span><span class="lbl">Histórico</span></div>
+      <div class="nav-item" data-nav="relatorios"><span class="ic">&#9776;</span><span class="lbl">Relatórios</span></div>
+      <div class="nav-item" data-nav="emails"><span class="ic">&#9993;</span><span class="lbl">E-mails</span></div>
+      <div class="nav-item" data-nav="config"><span class="ic">&#9881;</span><span class="lbl">Configurações</span></div>
+    </div>
+    <div class="sidebar-foot">v3.0 · Firebase + GitHub Pages</div>
+  </aside>
+
+  <!-- ============================================================
+       MAIN
+       ============================================================ -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 id="page-title">Dashboard</h1>
+        <div class="topbar-meta">
+          <span>Semana atual: <b id="meta-semana-atual">—</b></span>
+          <span>Última atualização: <b id="meta-ultima-att">—</b></span>
+          <span>Próxima atualização: <b id="meta-proxima-att">—</b></span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <select id="global-week-select" class="week-select" title="Visualizar semana"></select>
+        <div class="logo-zukkin">ZUKKIN</div>
+      </div>
+    </header>
+
+    <main class="view-wrap" id="views">
+      <section class="view" id="view-dashboard"></section>
+      <section class="view" id="view-setor"></section>
+      <section class="view" id="view-historico"></section>
+      <section class="view" id="view-relatorios"></section>
+      <section class="view" id="view-emails"></section>
+      <section class="view" id="view-config"></section>
+    </main>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box" id="modal-box"></div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<!-- ============================================================
+     CONFIGURAÇÃO DO FIREBASE
+     Preencha com os valores do SEU projeto (Console do Firebase →
+     Configurações do projeto → Seus apps → </> Web). Veja o SETUP.md.
+     ============================================================ -->
+<script>
+const firebaseConfig = {
+  apiKey: "SUA_API_KEY_AQUI",
+  authDomain: "seu-projeto.firebaseapp.com",
+  projectId: "seu-projeto",
+  storageBucket: "seu-projeto.appspot.com",
+  messagingSenderId: "SEU_SENDER_ID",
+  appId: "SEU_APP_ID"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const auth = firebase.auth();
+</script>
+
+<script>
+/* =============================================================
+   MÓDULO: DATA
+   Fonte única dos dados em memória da aplicação (setores,
+   colaboradores, semanas, configuração de e-mails).
+   O estado inteiro é salvo como UM documento no Firestore
+   (coleção "estado", documento "main") — um banco de dados real,
+   compartilhado entre qualquer computador que abrir este site,
+   em vez de ficar preso ao navegador de uma única máquina.
+   Continua sem tela de login: por baixo dos panos o app entra
+   numa sessão anônima do Firebase só para as regras do Firestore
+   funcionarem — ninguém vê nem precisa digitar senha.
+   ============================================================= */
+const Data = (function(){
+
+  // Os 7 setores reais da Zukkin.
+  const SETORES = ['Qualidade','Operações','Projetos','RH','Desenvolvimento','Zpromo','Zrobot'];
+
+  const GESTORES = {};
+  SETORES.forEach(s => { GESTORES[s] = ''; });
+
+  const EMAIL_CONFIG = {};
+  SETORES.forEach(s => { EMAIL_CONFIG[s] = {gestorNome:'', gestorEmail:'', adicionais:[]}; });
+
+  let COLABORADORES = [];
+  let SEMANAS = [];
+
+  const SOURCE_CONFIG = {
+    fileId: '14jGeC75wE64upU4rvOrI75zZoQi3AhSxtZEgyT1Muwk',
+    fileTitle: 'BH - Zukkin',
+    // Exportação pública da planilha (funciona porque o arquivo está
+    // compartilhado como "Qualquer pessoa com o link pode visualizar").
+    // Se você recriar a planilha ou trocar o ID, atualize aqui.
+    diaAtualizacao: 1, // 1 = segunda-feira (0=domingo ... 6=sábado)
+    ultimaAtualizacao: null
+  };
+
+  const APP_CONFIG = {
+    powerAutomateUrl: '',
+    emailTeste: '',
+    modoTeste: false
+  };
+
+  const DOC_REF = () => db.collection('estado').doc('main');
+
+  // Salva o estado inteiro no Firestore. Não bloqueia a interface —
+  // é chamado "no braço" depois de qualquer alteração local.
+  async function persist(){
+    try{
+      await DOC_REF().set({
+        colaboradores: COLABORADORES,
+        semanas: SEMANAS,
+        emailConfig: EMAIL_CONFIG,
+        gestores: GESTORES,
+        sourceConfig: SOURCE_CONFIG,
+        appConfig: APP_CONFIG,
+        atualizadoEm: new Date().toISOString()
+      });
+    }catch(e){ console.warn('[Data] Falha ao salvar no Firestore', e); }
+  }
+
+  // Carrega o estado salvo do Firestore. Precisa estar autenticado
+  // (mesmo que anonimamente) antes de chamar — ver App.init().
+  async function carregarAsync(){
+    try{
+      const snap = await DOC_REF().get();
+      if (!snap.exists) return;
+      const saved = snap.data();
+      if (Array.isArray(saved.colaboradores)) COLABORADORES = saved.colaboradores;
+      if (Array.isArray(saved.semanas)) SEMANAS = saved.semanas;
+      if (saved.emailConfig) Object.assign(EMAIL_CONFIG, saved.emailConfig);
+      if (saved.gestores) Object.assign(GESTORES, saved.gestores);
+      if (saved.sourceConfig) Object.assign(SOURCE_CONFIG, saved.sourceConfig);
+      if (saved.appConfig) Object.assign(APP_CONFIG, saved.appConfig);
+    }catch(e){ console.warn('[Data] Falha ao carregar do Firestore', e); }
+  }
+
+  function slug(s){
+    return (s||'').toString().trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g,'')
+      .replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+  }
+
+  // Aplica os colaboradores lidos da planilha numa determinada semana:
+  // insere novos, atualiza existentes, calcula saldo anterior a partir
+  // do último saldo conhecido e NUNCA apaga/sobrescreve semanas antigas.
+  function aplicarImportacao(linhas, semana){
+    const semanasConhecidas = SEMANAS.slice().sort();
+    const idx = semanasConhecidas.indexOf(semana);
+    const semanaAnteriorId = idx > 0 ? semanasConhecidas[idx-1]
+      : (idx === -1 && semanasConhecidas.length ? semanasConhecidas[semanasConhecidas.length-1] : null);
+
+    linhas.forEach(l => {
+      const id = slug(l.setor) + '__' + slug(l.nome);
+      let c = COLABORADORES.find(x => x.id === id);
+      if (!c){
+        c = { id, nome:l.nome, cargo:l.cargo||'', setor:l.setor, gestor:(EMAIL_CONFIG[l.setor]||{}).gestorNome||'', historico:{} };
+        COLABORADORES.push(c);
+      } else {
+        c.nome = l.nome;
+        if (l.cargo) c.cargo = l.cargo;
+        c.gestor = (EMAIL_CONFIG[l.setor]||{}).gestorNome || c.gestor;
+      }
+      const base = semanaAnteriorId && c.historico[semanaAnteriorId] ? c.historico[semanaAnteriorId].saldoAtual : 0;
+      const saldoAtual = l.saldoAtual;
+      const variacao = saldoAtual - base;
+      c.historico[semana] = {
+        semana, saldoAnterior: base, saldoAtual,
+        horasPositivas: Math.max(variacao,0), horasNegativas: Math.max(-variacao,0), horasExtras:0,
+        variacao, situacao: Calc.calcSituacao(saldoAtual)
+      };
+    });
+  }
+
+  return {
+    SETORES, GESTORES, EMAIL_CONFIG, SOURCE_CONFIG, APP_CONFIG,
+    get COLABORADORES(){ return COLABORADORES; },
+    get SEMANAS(){ return SEMANAS; },
+    persist, carregarAsync, slug, aplicarImportacao
+  };
+})();
+</script>
+
+<script>
+/* =============================================================
+   MÓDULO: CALC — idêntico ao da versão anterior (sem alterações).
+   ============================================================= */
+const Calc = (function(){
+
+  const LIMIAR_ATENCAO = 2;
+  const LIMIAR_ZERO = 1/60;
+  const LIMIAR_POSITIVO_ALTO = 20;
+  const LIMIAR_VARIACAO_ALTA = 5;
+
+  function formatHoras(valor){
+    if (valor === null || valor === undefined || isNaN(valor)) return '—';
+    const sinal = valor < -LIMIAR_ZERO ? '-' : (valor > LIMIAR_ZERO ? '+' : '');
+    const abs = Math.abs(valor);
+    let hh = Math.floor(abs);
+    let mm = Math.round((abs - hh) * 60);
+    if (mm === 60){ mm = 0; hh += 1; }
+    return `${sinal}${String(hh).padStart(2,'0')}h${String(mm).padStart(2,'0')}`;
+  }
+
+  function parseHorasString(str){
+    if (typeof str === 'number') return str;
+    if (!str) return 0;
+    const negativo = String(str).trim().startsWith('-');
+    const limpo = String(str).replace(/[+\-]/g,'').replace('h', ':').replace('H', ':');
+    const partes = limpo.split(':');
+    const hh = parseInt(partes[0], 10) || 0;
+    const mm = parseInt(partes[1], 10) || 0;
+    const valor = hh + (mm/60);
+    return negativo ? -valor : valor;
+  }
+
+  function calcSituacao(saldo){
+    if (Math.abs(saldo) < LIMIAR_ZERO) return 'Zerado';
+    if (saldo > LIMIAR_ATENCAO) return 'Positivo';
+    if (saldo < -LIMIAR_ATENCAO) return 'Negativo';
+    return 'Atenção';
+  }
+
+  function calcClassificacao(saldo){
+    const sit = calcSituacao(saldo);
+    if (sit === 'Positivo') return {label:'Situação favorável', tom:'positivo'};
+    if (sit === 'Negativo') return {label: saldo <= -LIMIAR_POSITIVO_ALTO*0.4 ? 'Atenção prioritária' : 'Atenção', tom:'negativo'};
+    if (sit === 'Atenção') return {label:'Atenção', tom:'atencao'};
+    return {label:'Banco zerado', tom:'zerado'};
+  }
+
+  function badgeClass(situacao){
+    switch(situacao){
+      case 'Positivo': return 'badge-positivo';
+      case 'Negativo': return 'badge-negativo';
+      case 'Atenção':  return 'badge-atencao';
+      default: return 'badge-zerado';
+    }
+  }
+
+  function variacao(atual, anterior){
+    return (atual || 0) - (anterior || 0);
+  }
+
+  function aggregateSetor(colaboradores, setor, semana){
+    const doSetor = colaboradores.filter(c => c.setor === setor);
+    return aggregateLista(doSetor, semana);
+  }
+
+  function aggregateLista(lista, semana){
+    let saldoPositivoTotal = 0, saldoNegativoTotal = 0, saldoGeral = 0;
+    let qtdPositivo = 0, qtdNegativo = 0, qtdAtencao = 0, qtdZerado = 0;
+    let horasPositivasTotal = 0, horasNegativasTotal = 0;
+
+    lista.forEach(c => {
+      const semanaData = c.historico[semana];
+      if (!semanaData) return;
+      const saldo = semanaData.saldoAtual;
+      saldoGeral += saldo;
+      horasPositivasTotal += semanaData.horasPositivas;
+      horasNegativasTotal += semanaData.horasNegativas;
+      if (saldo > 0) saldoPositivoTotal += saldo;
+      if (saldo < 0) saldoNegativoTotal += saldo;
+      const sit = semanaData.situacao;
+      if (sit === 'Positivo') qtdPositivo++;
+      else if (sit === 'Negativo') qtdNegativo++;
+      else if (sit === 'Atenção') qtdAtencao++;
+      else qtdZerado++;
+    });
+
+    const total = lista.length || 1;
+    return {
+      totalColaboradores: lista.length,
+      saldoPositivoTotal, saldoNegativoTotal, saldoGeral,
+      horasPositivasTotal, horasNegativasTotal,
+      mediaPorColaborador: saldoGeral / total,
+      qtdPositivo, qtdNegativo, qtdAtencao, qtdZerado
+    };
+  }
+
+  function ranking(colaboradores, semana, {ordem='desc', setor=null, limite=8} = {}){
+    let lista = colaboradores.filter(c => c.historico[semana]);
+    if (setor) lista = lista.filter(c => c.setor === setor);
+    lista = lista.map(c => ({ colaborador: c, saldo: c.historico[semana].saldoAtual }));
+    lista.sort((a,b) => ordem === 'desc' ? b.saldo - a.saldo : a.saldo - b.saldo);
+    return lista.slice(0, limite);
+  }
+
+  function detectarPontosAtencao(colaboradores, semanaAtual, semanaAnterior){
+    const pontos = [];
+    colaboradores.forEach(c => {
+      const atual = c.historico[semanaAtual];
+      if (!atual) return;
+      const anterior = semanaAnterior ? c.historico[semanaAnterior] : null;
+
+      if (atual.situacao === 'Negativo'){
+        pontos.push({colaboradorId:c.id, nome:c.nome, setor:c.setor, severidade:'alta',
+          tipo:'Banco negativo', mensagem:`Saldo atual de ${formatHoras(atual.saldoAtual)}.`});
+      }
+      if (anterior){
+        const varSemana = atual.saldoAtual - anterior.saldoAtual;
+        if (varSemana <= -LIMIAR_VARIACAO_ALTA && atual.saldoAtual < 0){
+          pontos.push({colaboradorId:c.id, nome:c.nome, setor:c.setor, severidade:'alta',
+            tipo:'Crescimento do saldo negativo', mensagem:`Variação de ${formatHoras(varSemana)} em relação à semana anterior.`});
+        }
+        if (varSemana >= LIMIAR_VARIACAO_ALTA){
+          pontos.push({colaboradorId:c.id, nome:c.nome, setor:c.setor, severidade:'media',
+            tipo:'Aumento expressivo do banco', mensagem:`Variação de ${formatHoras(varSemana)} em relação à semana anterior.`});
+        }
+      }
+      if (atual.saldoAtual >= LIMIAR_POSITIVO_ALTO){
+        pontos.push({colaboradorId:c.id, nome:c.nome, setor:c.setor, severidade:'media',
+          tipo:'Saldo positivo muito elevado', mensagem:`Saldo atual de ${formatHoras(atual.saldoAtual)} — acima do limite recomendado.`});
+      }
+      const semanas = Data.SEMANAS;
+      const idx = semanas.indexOf(semanaAtual);
+      if (idx >= 2){
+        const w0 = c.historico[semanas[idx]], w1 = c.historico[semanas[idx-1]], w2 = c.historico[semanas[idx-2]];
+        if (w0 && w1 && w2){
+          if (w0.variacao > 0 && w1.variacao > 0 && w2.variacao > 0){
+            pontos.push({colaboradorId:c.id, nome:c.nome, setor:c.setor, severidade:'baixa',
+              tipo:'Acúmulo constante', mensagem:'Saldo positivo crescente há 3 semanas consecutivas.'});
+          }
+          if (w0.variacao < 0 && w1.variacao < 0 && w2.variacao < 0){
+            pontos.push({colaboradorId:c.id, nome:c.nome, setor:c.setor, severidade:'alta',
+              tipo:'Queda constante', mensagem:'Saldo em queda há 3 semanas consecutivas.'});
+          }
+        }
+      }
+    });
+    const ordemSeveridade = {alta:0, media:1, baixa:2};
+    pontos.sort((a,b) => ordemSeveridade[a.severidade] - ordemSeveridade[b.severidade]);
+    return pontos;
+  }
+
+  return {
+    LIMIAR_ATENCAO, LIMIAR_POSITIVO_ALTO, LIMIAR_VARIACAO_ALTA,
+    formatHoras, parseHorasString, calcSituacao, calcClassificacao, badgeClass,
+    variacao, aggregateSetor, aggregateLista, ranking, detectarPontosAtencao
+  };
+})();
+</script>
+
+<script>
+/* =============================================================
+   MÓDULO: HISTORY
+   Opera direto sobre Data.SEMANAS (sem cópia própria) — assim
+   funciona corretamente mesmo quando os dados chegam de forma
+   assíncrona do Firestore, sem risco de ficar com uma lista
+   "congelada" de semanas antigas.
+   ============================================================= */
+const History = (function(){
+
+  function listWeeks(){
+    return Data.SEMANAS.slice().sort();
+  }
+
+  function currentWeek(){
+    const w = listWeeks();
+    return w.length ? w[w.length - 1] : null;
+  }
+
+  function previousWeek(semana){
+    const w = listWeeks();
+    const idx = w.indexOf(semana);
+    return idx > 0 ? w[idx - 1] : null;
+  }
+
+  function nextScheduledWeek(){
+    const cw = currentWeek();
+    if (!cw) return null;
+    const [y,m,d] = cw.split('-').map(Number);
+    const dt = new Date(y, m-1, d);
+    dt.setDate(dt.getDate() + 7);
+    return dt.toISOString().slice(0,10);
+  }
+
+  // Nunca apaga uma semana existente — só adiciona se ainda não existir.
+  function addWeek(semana){
+    if (Data.SEMANAS.includes(semana)) return false;
+    Data.SEMANAS.push(semana);
+    return true;
+  }
+
+  function compareWeeks(colaborador, semanaA, semanaB){
+    const a = colaborador.historico[semanaA];
+    const b = colaborador.historico[semanaB];
+    if (!a || !b) return null;
+    return {
+      semanaA, semanaB,
+      saldoA: a.saldoAtual, saldoB: b.saldoAtual,
+      variacao: b.saldoAtual - a.saldoAtual
+    };
+  }
+
+  return { listWeeks, currentWeek, previousWeek, nextScheduledWeek, addWeek, compareWeeks };
+})();
+</script>
+
+<script>
+/* =============================================================
+   MÓDULO: IMPORT
+   Lê a planilha real "BH - Zukkin" direto do Google Sheets, sem
+   passar por nenhum backend: baixa o .xlsx público (a planilha
+   está compartilhada como "qualquer pessoa com o link pode
+   visualizar") via fetch() e faz o parsing com a SheetJS, que já
+   entende corretamente células mescladas — a mesma lógica de
+   detecção de blocos "Banco de Horas - <Setor>" de antes, agora
+   rodando sobre a grade de células de cada aba da planilha
+   (Qualidade, Operações, Produtos [Zpromo+Zrobot], Projetos,
+   Desenvolvimento, RH). Só os 7 setores cadastrados em
+   Data.SETORES são reconhecidos; qualquer outra coisa é ignorada
+   e sinalizada como aviso.
+   ============================================================= */
+const Import = (function(){
+
+  let status = 'idle'; // 'idle' | 'loading' | 'success' | 'error'
+  function getStatus(){ return status; }
+
+  function identificarSemanaReferencia(dataRef = new Date()){
+    const dia = dataRef.getDay();
+    const diff = (dia - Data.SOURCE_CONFIG.diaAtualizacao + 7) % 7;
+    const seg = new Date(dataRef);
+    seg.setDate(dataRef.getDate() - diff);
+    return seg.toISOString().slice(0,10);
+  }
+
+  function normTxt(s){
+    return (s===undefined||s===null?'':String(s)).trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g,'');
+  }
+
+  const TITLE_RE = /^banco de horas\s*-\s*(.+)$/i;
+
+  function parseSaldo(raw){
+    if (raw===undefined||raw===null) return null;
+    let s = String(raw).trim();
+    if (s==='' || s==='-') return null;
+    s = s.replace(/\s+/g,'');
+    let m = s.match(/^(-)?(\d{1,4}):(\d{2})(?::(\d{2}))?$/);
+    if (m){
+      const sign = m[1] ? -1 : 1;
+      const hh = parseInt(m[2],10), mm = parseInt(m[3],10), ss = m[4]?parseInt(m[4],10):0;
+      return sign * (hh + mm/60 + ss/3600);
+    }
+    const s2 = s.replace(',', '.');
+    if (/^-?\d+(\.\d+)?$/.test(s2)) return parseFloat(s2);
+    return null;
+  }
+
+  function setorIdFromNome(nome){
+    const n = normTxt(nome);
+    const found = Data.SETORES.find(s => normTxt(s) === n || n.includes(normTxt(s)) || normTxt(s).includes(n));
+    return found || null;
+  }
+
+  // Recebe uma grade (array de arrays de células) de UMA aba e devolve
+  // os colaboradores encontrados nela. A SheetJS já resolve células
+  // mescladas (o valor aparece só na célula superior-esquerda), então
+  // não é preciso nenhum tratamento especial para isso aqui.
+  function parseBlocos(grade){
+    const titles = [];
+    for (let r = 0; r < grade.length; r++){
+      const row = grade[r] || [];
+      for (let c = 0; c < row.length; c++){
+        const m = String(row[c]||'').match(TITLE_RE);
+        if (m) titles.push({row:r, col:c, setorNomeOriginal:m[1].trim()});
+      }
+    }
+    const byRow = {};
+    titles.forEach(t => { (byRow[t.row]=byRow[t.row]||[]).push(t); });
+
+    const blocks = [];
+    Object.keys(byRow).forEach(rowKey => {
+      const row = parseInt(rowKey,10);
+      const rowTitles = byRow[rowKey].slice().sort((a,b)=>a.col-b.col);
+      rowTitles.forEach((t, idx) => {
+        let colEnd;
+        if (idx < rowTitles.length-1){
+          colEnd = rowTitles[idx+1].col - 1;
+        } else {
+          const headerRow = grade[row+1] || [];
+          let lastNonEmpty = t.col;
+          for (let c = t.col; c < Math.max(headerRow.length, t.col+1); c++){
+            const v = headerRow[c] || '';
+            if (v === '') break;
+            lastNonEmpty = c;
+          }
+          colEnd = lastNonEmpty;
+        }
+        blocks.push({...t, colEnd});
+      });
+    });
+
+    const resultado = { linhas: [], avisos: [] };
+    blocks.forEach(block => {
+      const headerRow = grade[block.row+1] || [];
+      let colColaborador=-1, colCargo=-1, colSaldo=-1;
+      for (let c = block.col; c <= block.colEnd; c++){
+        const h = normTxt(headerRow[c]);
+        if (h.includes('colaborador')) colColaborador = c;
+        else if (h.includes('cargo')) colCargo = c;
+        else if (h.includes('saldo') && h.includes('atual')) colSaldo = c;
+      }
+      const setorId = setorIdFromNome(block.setorNomeOriginal);
+      if (colColaborador === -1){
+        resultado.avisos.push(`Bloco "Banco de Horas - ${block.setorNomeOriginal}" não tem coluna "Colaborador" reconhecível — ignorado.`);
+        return;
+      }
+      if (!setorId){
+        resultado.avisos.push(`Setor "${block.setorNomeOriginal}" não corresponde a nenhum dos 7 setores cadastrados — ignorado.`);
+        return;
+      }
+      let r = block.row + 2;
+      while (r < grade.length){
+        const rowData = grade[r] || [];
+        const nome = String(rowData[colColaborador]||'').trim();
+        if (nome === '') break;
+        const saldoRaw = colSaldo!==-1 ? rowData[colSaldo] : undefined;
+        const saldoAtual = parseSaldo(saldoRaw);
+        if (saldoAtual === null){
+          resultado.avisos.push(`"${nome}" (${block.setorNomeOriginal}): saldo "${saldoRaw}" não reconhecido — tratado como 0.`);
+        }
+        resultado.linhas.push({
+          nome,
+          cargo: colCargo!==-1 ? String(rowData[colCargo]||'').trim() : '',
+          setor: setorId,
+          saldoAtual: saldoAtual===null?0:saldoAtual
+        });
+        r++;
+      }
+    });
+    return resultado;
+  }
+
+  // Roda parseBlocos em cada aba do workbook e junta os resultados.
+  function parseWorkbook(sheetsAOA){
+    const agregado = { linhas: [], avisos: [] };
+    sheetsAOA.forEach(({name, aoa}) => {
+      const parcial = parseBlocos(aoa);
+      agregado.linhas.push(...parcial.linhas);
+      parcial.avisos.forEach(a => agregado.avisos.push(`Aba "${name}": ${a}`));
+    });
+    return agregado;
+  }
+
+  function workbookParaAOA(wb){
+    return wb.SheetNames.map(name => ({
+      name,
+      aoa: XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, raw:false, defval:''})
+    }));
+  }
+
+  // Baixa o .xlsx público da planilha (exportação do Google Sheets,
+  // funciona porque o arquivo está compartilhado como "qualquer pessoa
+  // com o link pode visualizar") e faz o parsing.
+  async function buscarWorkbookPublico(){
+    if (location.protocol === 'file:'){
+      throw new Error('Este arquivo está sendo aberto direto do computador (file://) — nesse modo o navegador bloqueia a busca da planilha por segurança. Publique no GitHub Pages (veja o SETUP.md) ou use "importar arquivo manualmente" em Configurações para testar agora.');
+    }
+    const url = `https://docs.google.com/spreadsheets/d/${Data.SOURCE_CONFIG.fileId}/export?format=xlsx`;
+    let resp;
+    try{
+      resp = await fetch(url);
+    }catch(e){
+      throw new Error('Não foi possível conectar ao Google Sheets (erro de rede ou bloqueio do navegador). Use "importar arquivo manualmente" em Configurações como alternativa.');
+    }
+    if (!resp.ok){
+      throw new Error(`Não foi possível baixar a planilha (HTTP ${resp.status}). Verifique se ela continua compartilhada como "Qualquer pessoa com o link pode visualizar".`);
+    }
+    const buf = await resp.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    return workbookParaAOA(wb);
+  }
+
+  async function processarESalvar(sheetsAOA){
+    const { linhas, avisos } = parseWorkbook(sheetsAOA);
+    if (linhas.length === 0) throw new Error('Nenhum colaborador foi reconhecido na planilha.');
+    const semana = identificarSemanaReferencia();
+    Data.aplicarImportacao(linhas, semana);
+    History.addWeek(semana);
+    Data.SOURCE_CONFIG.ultimaAtualizacao = semana;
+    await Data.persist();
+    return {ok:true, semana, totalColaboradores: linhas.length, avisos};
+  }
+
+  // Atualização automática — usada na abertura do painel e no botão
+  // "Atualizar agora".
+  async function atualizarDaPlanilha(){
+    status = 'loading';
+    try{
+      const sheetsAOA = await buscarWorkbookPublico();
+      const resultado = await processarESalvar(sheetsAOA);
+      status = 'success';
+      return resultado;
+    }catch(e){
+      status = 'error';
+      return {ok:false, erro: (e && e.message) || String(e)};
+    }
+  }
+
+  // Alternativa manual — caso a planilha alguma vez pare de estar
+  // acessível publicamente, o RH pode selecionar o arquivo .xlsx
+  // exportado manualmente do Google Sheets.
+  async function atualizarDeArquivo(file){
+    status = 'loading';
+    try{
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, {type:'array'});
+      const resultado = await processarESalvar(workbookParaAOA(wb));
+      status = 'success';
+      return resultado;
+    }catch(e){
+      status = 'error';
+      return {ok:false, erro: (e && e.message) || String(e)};
+    }
+  }
+
+  return { getStatus, identificarSemanaReferencia, atualizarDaPlanilha, atualizarDeArquivo };
+})();
+</script>
+
+<script>
+/* =============================================================
+   MÓDULO: REPORT — idêntico ao da versão anterior (sem alterações).
+   ============================================================= */
+const Report = (function(){
+
+  function buildSectorReport(setor, semana){
+    const colaboradores = Data.COLABORADORES.filter(c => c.setor === setor);
+    const semanaAnterior = History.previousWeek(semana);
+    const resumo = Calc.aggregateLista(colaboradores, semana);
+    const pontos = Calc.detectarPontosAtencao(colaboradores, semana, semanaAnterior).filter(p => p.setor === setor);
+
+    const tabela = colaboradores.map(c => {
+      const atual = c.historico[semana];
+      const anterior = semanaAnterior ? c.historico[semanaAnterior] : null;
+      return {
+        id: c.id,
+        nome: c.nome,
+        cargo: c.cargo || '',
+        saldoAnterior: anterior ? anterior.saldoAtual : null,
+        saldoAtual: atual ? atual.saldoAtual : null,
+        variacao: atual ? atual.variacao : null,
+        situacao: atual ? atual.situacao : '—'
+      };
+    }).sort((a,b) => (b.saldoAtual||0) - (a.saldoAtual||0));
+
+    return {
+      setor, semana, semanaAnterior,
+      gestor: Data.GESTORES[setor],
+      resumo, tabela, pontosDeAtencao: pontos
+    };
+  }
+
+  function renderReportHTML(reportData){
+    const {setor, semana, resumo, tabela, pontosDeAtencao, gestor} = reportData;
+    const linhas = tabela.map(l => `
+      <tr>
+        <td>${l.nome}</td>
+        <td>${l.cargo || '—'}</td>
+        <td style="text-align:right">${Calc.formatHoras(l.saldoAnterior)}</td>
+        <td style="text-align:right">${Calc.formatHoras(l.saldoAtual)}</td>
+        <td style="text-align:right">${Calc.formatHoras(l.variacao)}</td>
+        <td>${l.situacao}</td>
+      </tr>`).join('');
+
+    const observacoes = pontosDeAtencao.length
+      ? `<ul>${pontosDeAtencao.map(p => `<li><b>${p.nome}</b> — ${p.tipo}: ${p.mensagem}</li>`).join('')}</ul>`
+      : '<p>Nenhum ponto de atenção identificado nesta semana.</p>';
+
+    return `
+      <div style="font-family:Arial,sans-serif;color:#26292e;">
+        <div style="background:#17191c;color:#fff;padding:20px 24px;border-radius:12px 12px 0 0;">
+          <div style="font-weight:800;letter-spacing:1.5px;font-size:13px;color:#f6d9de;">ZUKKIN</div>
+          <h2 style="margin:6px 0 0;font-size:18px;">Relatório Semanal de Banco de Horas</h2>
+          <div style="font-size:12px;color:#c7cbd1;margin-top:4px;">Setor: ${setor} · Gestor: ${gestor} · Semana: ${formatSemana(semana)}</div>
+        </div>
+        <div style="border:1px solid #dde0e3;border-top:none;padding:20px 24px;border-radius:0 0 12px 12px;">
+          <p><b>Resumo (uso interno do RH)</b></p>
+          <ul>
+            <li>Total de colaboradores: ${resumo.totalColaboradores}</li>
+            <li>Saldo positivo: ${Calc.formatHoras(resumo.saldoPositivoTotal)}</li>
+            <li>Saldo negativo: ${Calc.formatHoras(resumo.saldoNegativoTotal)}</li>
+            <li>Saldo geral: ${Calc.formatHoras(resumo.saldoGeral)}</li>
+          </ul>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
+            <thead>
+              <tr style="background:#f7f7f8;text-align:left;">
+                <th style="padding:8px;">Colaborador</th>
+                <th style="padding:8px;">Cargo</th>
+                <th style="padding:8px;text-align:right;">Saldo anterior</th>
+                <th style="padding:8px;text-align:right;">Saldo atual</th>
+                <th style="padding:8px;text-align:right;">Variação</th>
+                <th style="padding:8px;">Situação</th>
+              </tr>
+            </thead>
+            <tbody>${linhas}</tbody>
+          </table>
+          <p style="margin-top:16px;"><b>Observações / Pontos de atenção</b></p>
+          ${observacoes}
+          <p style="margin-top:16px;font-size:11.5px;color:#7c828c;">Esta prévia é só para uso interno do RH. O e-mail enviado ao gestor traz apenas Colaborador, Cargo e Saldo atual — o que existe na planilha.</p>
+        </div>
+      </div>`;
+  }
+
+  function formatSemana(semana){
+    if (!semana) return '—';
+    const [y,m,d] = semana.split('-');
+    return `${d}/${m}/${y}`;
+  }
+
+  function exportSectorCSV(setor, semana){
+    const rep = buildSectorReport(setor, semana);
+    const header = ['Colaborador','Cargo','Gestor','Saldo anterior','Saldo atual','Variação','Situação'];
+    const linhas = rep.tabela.map(l => [
+      l.nome, l.cargo || '', rep.gestor,
+      Calc.formatHoras(l.saldoAnterior), Calc.formatHoras(l.saldoAtual),
+      Calc.formatHoras(l.variacao), l.situacao
+    ]);
+    const csv = [header, ...linhas].map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')).join('\n');
+    const blob = new Blob(['﻿' + csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `banco_de_horas_${setor.toLowerCase().replace(/[^a-z]/g,'')}_${semana}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  return { buildSectorReport, renderReportHTML, formatSemana, exportSectorCSV };
+})();
+</script>
+
+<script>
+/* =============================================================
+   MÓDULO: EMAIL — idêntico ao da versão anterior (sem alterações).
+   Nenhum e-mail é enviado automaticamente: o módulo App só chama
+   enviarRelatorioSetor depois de uma confirmação manual explícita
+   na tela (ver App.abrirConfirmacaoEnvio).
+   ============================================================= */
+const EmailModule = (function(){
+
+  function _endpointEnvioRelatorio(payload){
+    if (!Data.APP_CONFIG.powerAutomateUrl){
+      return Promise.reject({ok:false, integrado:false, mensagem:'Configure a URL do Power Automate em Configurações antes de enviar.'});
+    }
+    return fetch(Data.APP_CONFIG.powerAutomateUrl, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    }).then(resp => {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return {ok:true};
+    }).catch(err => Promise.reject({
+      ok:false, integrado:true,
+      mensagem:'Falha ao chamar o Power Automate: ' + (err && err.message ? err.message : err)
+    }));
+  }
+
+  function getDestinatarios(setor){
+    const cfg = Data.EMAIL_CONFIG[setor];
+    if (!cfg) return [];
+    return [cfg.gestorEmail, ...cfg.adicionais].filter(Boolean);
+  }
+
+  function enviarRelatorioSetor(setor, semana){
+    const reportData = Report.buildSectorReport(setor, semana);
+    const modoTeste = !!Data.APP_CONFIG.modoTeste;
+    const destinatarios = modoTeste ? [Data.APP_CONFIG.emailTeste].filter(Boolean) : getDestinatarios(setor);
+    if (!destinatarios.length){
+      return Promise.reject({ok:false, mensagem: modoTeste
+        ? 'Cadastre um e-mail de teste em Configurações antes de usar o Modo de teste.'
+        : 'Nenhum e-mail cadastrado para este setor — veja E-mails.'});
+    }
+    const payload = {
+      setor: (modoTeste ? '[TESTE] ' : '') + setor,
+      semana,
+      modoTeste,
+      destinatarios,
+      geradoEm: new Date().toISOString(),
+      colaboradores: reportData.tabela.map(l => ({ nome: l.nome, cargo: l.cargo || '', saldoAtual: l.saldoAtual }))
+    };
+    return _endpointEnvioRelatorio(payload);
+  }
+
+  function updateConfig(setor, {gestorNome, gestorEmail, adicionais}){
+    const cfg = Data.EMAIL_CONFIG[setor];
+    if (!cfg) return;
+    if (gestorNome !== undefined){ cfg.gestorNome = gestorNome; Data.GESTORES[setor] = gestorNome; }
+    if (gestorEmail !== undefined) cfg.gestorEmail = gestorEmail;
+    if (adicionais !== undefined) cfg.adicionais = adicionais;
+    Data.persist();
+  }
+
+  return { enviarRelatorioSetor, getDestinatarios, updateConfig };
+})();
+</script>
+
+<script>
+/* =============================================================
+   MÓDULO: CHARTS — idêntico ao da versão anterior (sem alterações).
+   ============================================================= */
+const Charts = (function(){
+
+  const PALETTE = {
+    linha: '#c8102e',
+    linhaFill: 'rgba(200,16,46,0.08)',
+    setores: ['#c8102e', '#7c828c', '#2f7d54', '#a4761f', '#585e67', '#1f6fb2', '#8a5cbf'],
+    positivo: '#2f7d54',
+    negativo: '#b23a3f',
+    grid: '#eef0f2',
+    texto: '#585e67'
+  };
+
+  const instances = {};
+
+  const BASE_OPTIONS = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: {mode:'index', intersect:false},
+    plugins: {
+      legend: {
+        display: true,
+        position: 'bottom',
+        labels: {boxWidth:9, boxHeight:9, usePointStyle:true, font:{size:11, family:'-apple-system, Segoe UI, Roboto'}, color:PALETTE.texto}
+      },
+      tooltip: {backgroundColor:'#17191c', titleFont:{size:12}, bodyFont:{size:12}, padding:10, cornerRadius:8}
+    },
+    scales: {
+      x: {grid:{display:false}, ticks:{color:PALETTE.texto, font:{size:11}}},
+      y: {grid:{color:PALETTE.grid}, ticks:{color:PALETTE.texto, font:{size:11}}}
+    }
+  };
+
+  function destroy(canvasId){
+    if (instances[canvasId]){ instances[canvasId].destroy(); delete instances[canvasId]; }
+  }
+
+  function render(canvasId, config){
+    const el = document.getElementById(canvasId);
+    if (!el) return null;
+
+    if (typeof Chart === 'undefined'){
+      const wrap = el.closest('.chart-box') || el.parentElement;
+      if (wrap) wrap.innerHTML = '<div class="empty-state">Não foi possível carregar a biblioteca de gráficos (Chart.js).</div>';
+      return null;
+    }
+
+    destroy(canvasId);
+    const merged = {
+      type: config.type,
+      data: config.data,
+      options: Object.assign({}, BASE_OPTIONS, config.options || {})
+    };
+    try{
+      instances[canvasId] = new Chart(el.getContext('2d'), merged);
+      return instances[canvasId];
+    }catch(e){
+      console.error('[Charts] Falha ao renderizar', canvasId, e);
+      return null;
+    }
+  }
+
+  function evolucaoGeral(canvasId, semanas, valores){
+    render(canvasId, {
+      type:'line',
+      data:{
+        labels: semanas.map(Report.formatSemana),
+        datasets:[{label:'Saldo geral da empresa (h)', data:valores, borderColor:PALETTE.linha, backgroundColor:PALETTE.linhaFill, fill:true, tension:.3, pointRadius:3}]
+      }
+    });
+  }
+
+  function bancoPorSetor(canvasId, setores, valores){
+    render(canvasId, {
+      type:'bar',
+      data:{ labels:setores, datasets:[{label:'Saldo geral (h)', data:valores, backgroundColor:PALETTE.setores, borderRadius:6, maxBarThickness:46}] },
+      options:{ plugins:{legend:{display:false}} }
+    });
+  }
+
+  function rankingPositivo(canvasId, nomes, valores){
+    render(canvasId, {
+      type:'bar',
+      data:{ labels:nomes, datasets:[{label:'Saldo (h)', data:valores, backgroundColor:PALETTE.positivo, borderRadius:6}] },
+      options:{ indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{grid:{color:PALETTE.grid}}, y:{grid:{display:false}}} }
+    });
+  }
+
+  function rankingNegativo(canvasId, nomes, valores){
+    render(canvasId, {
+      type:'bar',
+      data:{ labels:nomes, datasets:[{label:'Saldo (h)', data:valores, backgroundColor:PALETTE.negativo, borderRadius:6}] },
+      options:{ indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{grid:{color:PALETTE.grid}}, y:{grid:{display:false}}} }
+    });
+  }
+
+  function evolucaoSemanal(canvasId, semanas, valores){
+    render(canvasId, {
+      type:'line',
+      data:{
+        labels: semanas.map(Report.formatSemana),
+        datasets:[{label:'Variação semanal do saldo geral (h)', data:valores, borderColor:PALETTE.setores[1], backgroundColor:'rgba(124,130,140,0.1)', fill:true, tension:.3, pointRadius:3}]
+      }
+    });
+  }
+
+  function evolucaoColaborador(canvasId, semanas, valores){
+    render(canvasId, {
+      type:'line',
+      data:{
+        labels: semanas.map(Report.formatSemana),
+        datasets:[{label:'Saldo (h)', data:valores, borderColor:PALETTE.linha, backgroundColor:PALETTE.linhaFill, fill:true, tension:.3, pointRadius:3}]
+      },
+      options:{ plugins:{legend:{display:false}} }
+    });
+  }
+
+  return { render, destroy, evolucaoGeral, bancoPorSetor, rankingPositivo, rankingNegativo, evolucaoSemanal, evolucaoColaborador, PALETTE };
+})();
+</script>
+
+<script>
+/* =============================================================
+   MÓDULO: APP
+   Igual à versão anterior (dashboard, setores, histórico,
+   relatórios com confirmação manual, e-mails, configurações),
+   com duas mudanças: App.init() agora autentica anonimamente e
+   espera o carregamento assíncrono do Firestore antes de
+   renderizar, e a tela de Configurações ganhou um campo para
+   importar o arquivo manualmente como alternativa.
+   ============================================================= */
+const App = (function(){
+
+  const state = {
+    view: 'dashboard',
+    setorAtual: 'Qualidade',
+    semanaSelecionada: null,
+    historico: {
+      filtroSetor: '', filtroColaborador: '', filtroGestor: '', filtroSituacao: '', filtroSemana: '',
+      sortKey: 'nome', sortDir: 'asc', page: 1, pageSize: 12
+    },
+    setorTabela: {
+      sortKey: 'saldoAtual', sortDir: 'desc', filtroSituacao: '', busca: '', page: 1, pageSize: 10
+    },
+    relatoriosSetorSelecionado: 'Qualidade',
+    cfgFeedback: null,
+    ultimoErroImport: null
+  };
+
+  function toast(mensagem, tipo='info'){
+    const wrap = document.getElementById('toast-wrap');
+    const el = document.createElement('div');
+    el.className = `toast ${tipo}`;
+    el.innerHTML = `<span>${mensagem}</span>`;
+    wrap.appendChild(el);
+    setTimeout(() => { el.style.opacity='0'; el.style.transition='opacity .25s'; setTimeout(()=>el.remove(), 250); }, 4200);
+  }
+
+  function goTo(view, opts={}){
+    state.view = view;
+    if (opts.setor) state.setorAtual = opts.setor;
+
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
+    const titles = {dashboard:'Dashboard', setor:state.setorAtual, historico:'Histórico', relatorios:'Relatórios', emails:'Configuração de E-mails', config:'Configurações'};
+    document.getElementById('page-title').textContent = titles[view] || 'Dashboard';
+
+    if (view === 'setor'){
+      document.querySelector(`.nav-item[data-nav="setor"][data-setor="${state.setorAtual}"]`)?.classList.add('active');
+    } else {
+      document.querySelector(`.nav-item[data-nav="${view}"]`)?.classList.add('active');
+    }
+
+    const map = {
+      dashboard: renderDashboard,
+      setor: renderSetor,
+      historico: renderHistorico,
+      relatorios: renderRelatorios,
+      emails: renderEmails,
+      config: renderConfig
+    };
+    document.getElementById(`view-${view}`).classList.add('active');
+    (map[view] || renderDashboard)();
+  }
+
+  function wireNav(){
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const nav = item.getAttribute('data-nav');
+        const setor = item.getAttribute('data-setor');
+        goTo(nav, {setor});
+      });
+    });
+  }
+
+  function refreshGlobalWeekOptions(){
+    const sel = document.getElementById('global-week-select');
+    sel.innerHTML = History.listWeeks().map(w => `<option value="${w}">Semana ${Report.formatSemana(w)}</option>`).join('');
+    sel.value = state.semanaSelecionada;
+  }
+
+  function wireGlobalWeekSelect(){
+    refreshGlobalWeekOptions();
+    const sel = document.getElementById('global-week-select');
+    sel.addEventListener('change', () => {
+      state.semanaSelecionada = sel.value;
+      updateTopbarMeta();
+      goTo(state.view);
+    });
+  }
+
+  function updateTopbarMeta(){
+    document.getElementById('meta-semana-atual').textContent = Report.formatSemana(state.semanaSelecionada);
+    document.getElementById('meta-ultima-att').textContent = Report.formatSemana(History.currentWeek());
+    document.getElementById('meta-proxima-att').textContent = Report.formatSemana(History.nextScheduledWeek());
+  }
+
+  function sortData(lista, key, dir){
+    const out = [...lista].sort((a,b) => {
+      let va = a[key], vb = b[key];
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va === undefined || va === null) va = -Infinity;
+      if (vb === undefined || vb === null) vb = -Infinity;
+      if (va < vb) return dir === 'asc' ? -1 : 1;
+      if (va > vb) return dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return out;
+  }
+
+  function paginate(lista, page, pageSize){
+    const totalPages = Math.max(1, Math.ceil(lista.length / pageSize));
+    const p = Math.min(Math.max(1, page), totalPages);
+    const start = (p-1) * pageSize;
+    return {itens: lista.slice(start, start+pageSize), page:p, totalPages, total:lista.length};
+  }
+
+  function situacaoBadge(situacao){
+    return `<span class="badge ${Calc.badgeClass(situacao)}">${situacao}</span>`;
+  }
+
+  function variacaoSpan(v){
+    if (v === null || v === undefined) return '—';
+    const cls = v > 0.001 ? 'var-up' : (v < -0.001 ? 'var-down' : 'var-flat');
+    const seta = v > 0.001 ? '▲' : (v < -0.001 ? '▼' : '•');
+    return `<span class="${cls}">${seta} ${Calc.formatHoras(v)}</span>`;
+  }
+
+  function atualizarAgora(){
+    return Import.atualizarDaPlanilha().then(res => {
+      if (res.ok){
+        state.ultimoErroImport = null;
+        state.semanaSelecionada = History.currentWeek();
+        refreshGlobalWeekOptions();
+        updateTopbarMeta();
+        if (document.getElementById(`view-${state.view}`)) goTo(state.view);
+        toast(`Dados atualizados (semana ${Report.formatSemana(res.semana)})${res.avisos && res.avisos.length ? ' · ' + res.avisos.length + ' aviso(s)' : ''}.`, 'success');
+      } else {
+        state.ultimoErroImport = res.erro;
+        toast('Não foi possível atualizar da planilha: ' + res.erro, 'error');
+        if (!History.listWeeks().length && document.getElementById(`view-${state.view}`)) goTo(state.view);
+      }
+      return res;
+    });
+  }
+
+  function renderDashboard(){
+    const semana = state.semanaSelecionada;
+    const el = document.getElementById('view-dashboard');
+
+    if (!semana || !History.listWeeks().length){
+      el.innerHTML = state.ultimoErroImport ? `
+        <div class="loading-state">
+          <div class="banner banner-warn" style="text-align:left;">${state.ultimoErroImport}</div>
+          <div style="margin-top:6px;"><button class="btn btn-primary btn-sm" onclick="App.atualizarAgora()">Tentar novamente</button></div>
+        </div>` : `
+        <div class="loading-state">
+          <div class="spinner"></div>
+          Buscando dados da planilha "BH - Zukkin"...
+          <div style="margin-top:14px;"><button class="btn btn-primary btn-sm" onclick="App.atualizarAgora()">Tentar novamente</button></div>
+        </div>`;
+      return;
+    }
+
+    const semanaAnterior = History.previousWeek(semana);
+    const geral = Calc.aggregateLista(Data.COLABORADORES, semana);
+    const pontos = Calc.detectarPontosAtencao(Data.COLABORADORES, semana, semanaAnterior);
+
+    const porSetor = Data.SETORES.map(s => ({ setor:s, ...Calc.aggregateSetor(Data.COLABORADORES, s, semana) }));
+
+    el.innerHTML = `
+      <div class="grid grid-cards">
+        <div class="card accent-red"><h3>Total de colaboradores</h3><div class="kpi">${geral.totalColaboradores}</div><div class="kpi-sub">na semana ${Report.formatSemana(semana)}</div></div>
+        <div class="card accent-green"><h3>Total de horas positivas</h3><div class="kpi">${Calc.formatHoras(geral.horasPositivasTotal)}</div><div class="kpi-sub">acumulado na semana</div></div>
+        <div class="card accent-red"><h3>Total de horas negativas</h3><div class="kpi">${Calc.formatHoras(-geral.horasNegativasTotal)}</div><div class="kpi-sub">acumulado na semana</div></div>
+        <div class="card"><h3>Saldo geral do banco</h3><div class="kpi">${Calc.formatHoras(geral.saldoGeral)}</div><div class="kpi-sub">soma de todos os setores</div></div>
+      </div>
+      <div class="grid grid-cards" style="margin-top:16px;">
+        <div class="card accent-green"><h3>Colaboradores c/ banco positivo</h3><div class="kpi">${geral.qtdPositivo}</div></div>
+        <div class="card accent-red"><h3>Colaboradores c/ banco negativo</h3><div class="kpi">${geral.qtdNegativo}</div></div>
+        <div class="card"><h3>Precisam de atenção</h3><div class="kpi">${geral.qtdAtencao}</div><div class="kpi-sub">saldo próximo de zero</div></div>
+        <div class="card"><h3>Média de saldo / colaborador</h3><div class="kpi">${Calc.formatHoras(geral.mediaPorColaborador)}</div></div>
+      </div>
+
+      <div class="section-title"><h2>Banco de horas por setor</h2><span class="hint">Semana ${Report.formatSemana(semana)}</span></div>
+      <div class="panel">
+        <div class="panel-body" style="padding:0;">
+          <div class="table-scroll">
+          <table class="data-table">
+            <thead><tr><th>Setor</th><th>Colaboradores</th><th>Saldo positivo</th><th>Saldo negativo</th><th>Saldo geral</th></tr></thead>
+            <tbody>
+              ${porSetor.map(s => `
+                <tr onclick="App.goTo('setor', {setor:'${s.setor}'})">
+                  <td><b>${s.setor}</b></td>
+                  <td>${s.totalColaboradores}</td>
+                  <td>${Calc.formatHoras(s.saldoPositivoTotal)}</td>
+                  <td>${Calc.formatHoras(s.saldoNegativoTotal)}</td>
+                  <td>${Calc.formatHoras(s.saldoGeral)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Gráficos</h2><span class="hint">Padrão visual único para todos os indicadores</span></div>
+      <div class="grid grid-charts">
+        <div class="panel chart-card">
+          <div class="panel-head" style="padding:0 0 10px;border:none;"><h3>1 · Evolução do banco de horas (geral)</h3></div>
+          <div class="chart-box"><canvas id="chart-evolucao-geral"></canvas></div>
+        </div>
+        <div class="panel chart-card">
+          <div class="panel-head" style="padding:0 0 10px;border:none;"><h3>2 · Banco por setor</h3></div>
+          <div class="chart-box"><canvas id="chart-banco-setor"></canvas></div>
+        </div>
+        <div class="panel chart-card">
+          <div class="panel-head" style="padding:0 0 10px;border:none;"><h3>3 · Maiores saldos positivos</h3></div>
+          <div class="chart-box"><canvas id="chart-rank-positivo"></canvas></div>
+        </div>
+        <div class="panel chart-card">
+          <div class="panel-head" style="padding:0 0 10px;border:none;"><h3>4 · Maiores saldos negativos</h3></div>
+          <div class="chart-box"><canvas id="chart-rank-negativo"></canvas></div>
+        </div>
+      </div>
+      <div class="grid" style="margin-top:16px;">
+        <div class="panel chart-card">
+          <div class="panel-head" style="padding:0 0 10px;border:none;"><h3>5 · Evolução semanal do saldo geral da empresa</h3></div>
+          <div class="chart-box"><canvas id="chart-evolucao-semanal"></canvas></div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Pontos de atenção</h2><span class="hint">${pontos.length} identificado(s) nesta semana</span></div>
+      <div class="panel panel-body">
+        ${pontos.length === 0
+          ? '<div class="empty-state">Nenhum ponto de atenção identificado nesta semana. ✅</div>'
+          : pontos.slice(0,12).map(p => `
+            <div class="alert-item" style="cursor:pointer" onclick="App.openColaborador('${p.colaboradorId}')">
+              <div class="alert-dot ${p.severidade === 'alta' ? '' : 'mid'}"></div>
+              <div>
+                <div class="alert-title">${p.nome} <span style="color:var(--gray-400);font-weight:400;">· ${p.setor}</span></div>
+                <div class="alert-desc"><b>${p.tipo}.</b> ${p.mensagem}</div>
+              </div>
+            </div>`).join('')}
+      </div>
+    `;
+
+    const semanas = History.listWeeks();
+    const evolucaoGeral = semanas.map(w => Calc.aggregateLista(Data.COLABORADORES, w).saldoGeral);
+    const evolucaoSemanal = evolucaoGeral.map((v,i) => i === 0 ? 0 : v - evolucaoGeral[i-1]);
+
+    Charts.evolucaoGeral('chart-evolucao-geral', semanas, evolucaoGeral);
+    Charts.bancoPorSetor('chart-banco-setor', porSetor.map(s=>s.setor), porSetor.map(s=>s.saldoGeral));
+    const rk = Calc.ranking(Data.COLABORADORES, semana, {ordem:'desc', limite:8}).filter(r => r.saldo > 0);
+    const rkNeg = Calc.ranking(Data.COLABORADORES, semana, {ordem:'asc', limite:8}).filter(r => r.saldo < 0);
+    Charts.rankingPositivo('chart-rank-positivo', rk.map(r=>r.colaborador.nome), rk.map(r=>r.saldo));
+    Charts.rankingNegativo('chart-rank-negativo', rkNeg.map(r=>r.colaborador.nome), rkNeg.map(r=>r.saldo));
+    Charts.evolucaoSemanal('chart-evolucao-semanal', semanas, evolucaoSemanal);
+  }
+
+  function renderSetor(){
+    const setor = state.setorAtual;
+    const semana = state.semanaSelecionada;
+    const el = document.getElementById('view-setor');
+
+    if (!semana || !History.listWeeks().length){
+      el.innerHTML = '<div class="loading-state"><div class="spinner"></div>Carregando dados...</div>';
+      return;
+    }
+
+    const semanaAnterior = History.previousWeek(semana);
+    const colaboradores = Data.COLABORADORES.filter(c => c.setor === setor);
+    const agg = Calc.aggregateSetor(Data.COLABORADORES, setor, semana);
+    const ranking = Calc.ranking(Data.COLABORADORES, semana, {setor, ordem:'desc', limite:6});
+
+    el.innerHTML = `
+      <div class="banner banner-info">Gestor responsável pelo setor <b>${setor}</b>: ${Data.GESTORES[setor] || 'não cadastrado (veja E-mails)'}. Os dados exibidos aqui pertencem exclusivamente a este setor.</div>
+
+      <div class="grid grid-cards">
+        <div class="card"><h3>Colaboradores</h3><div class="kpi">${agg.totalColaboradores}</div></div>
+        <div class="card"><h3>Saldo geral do setor</h3><div class="kpi">${Calc.formatHoras(agg.saldoGeral)}</div></div>
+        <div class="card"><h3>Média por colaborador</h3><div class="kpi">${Calc.formatHoras(agg.mediaPorColaborador)}</div></div>
+        <div class="card"><h3>Positivos / Negativos</h3><div class="kpi" style="font-size:20px;">${agg.qtdPositivo} <span style="color:var(--gray-400);">/</span> ${agg.qtdNegativo}</div></div>
+      </div>
+
+      <div class="grid grid-2" style="margin-top:20px;">
+        <div class="panel chart-card">
+          <div class="panel-head" style="padding:0 0 10px;border:none;"><h3>Evolução do banco de horas — ${setor}</h3></div>
+          <div class="chart-box"><canvas id="chart-setor-evolucao"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Ranking do setor</h3></div>
+          <div class="panel-body">
+            ${ranking.map(r => rankRow(r.colaborador.nome, r.saldo, ranking[0]?.saldo || 1)).join('') || '<div class="empty-state">Sem dados.</div>'}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Colaboradores de ${setor}</h2></div>
+      <div class="panel">
+        <div class="panel-head">
+          <div class="filters">
+            <div class="search-box"><span class="ic">🔎</span><input type="text" id="setor-busca" placeholder="Buscar colaborador..." value="${state.setorTabela.busca}"></div>
+            <select id="setor-filtro-situacao">
+              <option value="">Todas as situações</option>
+              ${['Positivo','Atenção','Negativo','Zerado'].map(s => `<option value="${s}" ${state.setorTabela.filtroSituacao===s?'selected':''}>${s}</option>`).join('')}
+            </select>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="Report.exportSectorCSV('${setor}','${semana}')">Exportar CSV</button>
+        </div>
+        <div class="table-scroll" id="setor-tabela-wrap"></div>
+        <div class="pagination" id="setor-tabela-pag"></div>
+      </div>
+
+      <div class="section-title"><h2>Histórico semanal do setor</h2><span class="hint">Totais agregados por semana</span></div>
+      <div class="panel panel-body" style="padding:0;">
+        <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Semana</th><th>Colaboradores</th><th>Saldo positivo</th><th>Saldo negativo</th><th>Saldo geral</th></tr></thead>
+          <tbody>
+            ${History.listWeeks().map(w => {
+              const a = Calc.aggregateSetor(Data.COLABORADORES, setor, w);
+              return `<tr onclick="document.getElementById('global-week-select').value='${w}'; document.getElementById('global-week-select').dispatchEvent(new Event('change'));">
+                <td>${Report.formatSemana(w)}</td><td>${a.totalColaboradores}</td>
+                <td>${Calc.formatHoras(a.saldoPositivoTotal)}</td><td>${Calc.formatHoras(a.saldoNegativoTotal)}</td><td>${Calc.formatHoras(a.saldoGeral)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        </div>
+      </div>
+    `;
+
+    Charts.evolucaoColaborador('chart-setor-evolucao', History.listWeeks(), History.listWeeks().map(w => Calc.aggregateSetor(Data.COLABORADORES, setor, w).saldoGeral));
+
+    renderSetorTabela(setor, semana, semanaAnterior, colaboradores);
+
+    document.getElementById('setor-busca').addEventListener('input', (e) => { state.setorTabela.busca = e.target.value; state.setorTabela.page=1; renderSetorTabela(setor, semana, semanaAnterior, colaboradores); });
+    document.getElementById('setor-filtro-situacao').addEventListener('change', (e) => { state.setorTabela.filtroSituacao = e.target.value; state.setorTabela.page=1; renderSetorTabela(setor, semana, semanaAnterior, colaboradores); });
+  }
+
+  function rankRow(nome, valor, max){
+    const pct = Math.min(100, Math.round(Math.abs(valor) / (Math.abs(max)||1) * 100));
+    const cor = valor >= 0 ? 'var(--pastel-green-text)' : 'var(--pastel-red-text)';
+    return `<div class="rank-row"><div class="rank-name">${nome}</div><div class="rank-bar-wrap"><div class="rank-bar" style="width:${pct}%;background:${cor};"></div></div><div class="rank-val" style="color:${cor};">${Calc.formatHoras(valor)}</div></div>`;
+  }
+
+  function renderSetorTabela(setor, semana, semanaAnterior, colaboradores){
+    let linhas = colaboradores.map(c => {
+      const atual = c.historico[semana];
+      const anterior = semanaAnterior ? c.historico[semanaAnterior] : null;
+      return {
+        id:c.id, nome:c.nome, cargo:c.cargo||'', gestor:c.gestor,
+        saldoAnterior: anterior ? anterior.saldoAtual : null,
+        saldoAtual: atual ? atual.saldoAtual : null,
+        variacao: atual ? atual.variacao : null,
+        situacao: atual ? atual.situacao : '—'
+      };
+    });
+
+    if (state.setorTabela.busca){
+      const q = state.setorTabela.busca.toLowerCase();
+      linhas = linhas.filter(l => l.nome.toLowerCase().includes(q));
+    }
+    if (state.setorTabela.filtroSituacao){
+      linhas = linhas.filter(l => l.situacao === state.setorTabela.filtroSituacao);
+    }
+    linhas = sortData(linhas, state.setorTabela.sortKey, state.setorTabela.sortDir);
+    const {itens, page, totalPages, total} = paginate(linhas, state.setorTabela.page, state.setorTabela.pageSize);
+
+    const wrap = document.getElementById('setor-tabela-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th data-sort="nome">Colaborador ${sortIcon('nome', state.setorTabela)}</th>
+            <th>Cargo</th>
+            <th data-sort="saldoAnterior">Saldo anterior ${sortIcon('saldoAnterior', state.setorTabela)}</th>
+            <th data-sort="saldoAtual">Saldo atual ${sortIcon('saldoAtual', state.setorTabela)}</th>
+            <th data-sort="variacao">Variação ${sortIcon('variacao', state.setorTabela)}</th>
+            <th data-sort="situacao">Situação ${sortIcon('situacao', state.setorTabela)}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itens.length ? itens.map(l => `
+            <tr onclick="App.openColaborador('${l.id}')">
+              <td><b>${l.nome}</b></td>
+              <td>${l.cargo || '—'}</td>
+              <td>${Calc.formatHoras(l.saldoAnterior)}</td>
+              <td>${Calc.formatHoras(l.saldoAtual)}</td>
+              <td>${variacaoSpan(l.variacao)}</td>
+              <td>${situacaoBadge(l.situacao)}</td>
+            </tr>`).join('') : `<tr><td colspan="6"><div class="table-empty">Nenhum colaborador encontrado para os filtros aplicados.</div></td></tr>`}
+        </tbody>
+      </table>`;
+
+    wrap.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', () => {
+      const key = th.getAttribute('data-sort');
+      if (state.setorTabela.sortKey === key) state.setorTabela.sortDir = state.setorTabela.sortDir === 'asc' ? 'desc' : 'asc';
+      else { state.setorTabela.sortKey = key; state.setorTabela.sortDir = 'asc'; }
+      renderSetorTabela(setor, semana, semanaAnterior, colaboradores);
+    }));
+
+    const pagEl = document.getElementById('setor-tabela-pag');
+    pagEl.innerHTML = `
+      <span class="pg-info">${total} colaborador(es) · página ${page} de ${totalPages}</span>
+      <button ${page<=1?'disabled':''} id="setor-pg-prev">‹ Anterior</button>
+      <button ${page>=totalPages?'disabled':''} id="setor-pg-next">Próxima ›</button>`;
+    pagEl.querySelector('#setor-pg-prev')?.addEventListener('click', () => { state.setorTabela.page--; renderSetorTabela(setor, semana, semanaAnterior, colaboradores); });
+    pagEl.querySelector('#setor-pg-next')?.addEventListener('click', () => { state.setorTabela.page++; renderSetorTabela(setor, semana, semanaAnterior, colaboradores); });
+  }
+
+  function sortIcon(key, st){
+    if (st.sortKey !== key) return '<span class="sort-ic">↕</span>';
+    return `<span class="sort-ic">${st.sortDir === 'asc' ? '↑' : '↓'}</span>`;
+  }
+
+  function renderHistorico(){
+    const h = state.historico;
+    const el = document.getElementById('view-historico');
+
+    if (!History.listWeeks().length){
+      el.innerHTML = '<div class="loading-state"><div class="spinner"></div>Carregando dados...</div>';
+      return;
+    }
+    if (!h.filtroSemana) h.filtroSemana = state.semanaSelecionada;
+
+    el.innerHTML = `
+      <div class="section-title" style="margin-top:0;"><h2>Semanas registradas</h2><span class="hint">${History.listWeeks().length} semana(s) no histórico</span></div>
+      <div class="panel panel-body" style="display:flex;gap:10px;flex-wrap:wrap;">
+        ${History.listWeeks().map(w => `<div class="chip" style="cursor:pointer;${w===h.filtroSemana?'background:var(--gray-900);color:#fff;':''}" data-week-chip="${w}">Semana ${Report.formatSemana(w)}</div>`).join('')}
+      </div>
+
+      <div class="section-title"><h2>Consulta detalhada</h2></div>
+      <div class="panel">
+        <div class="panel-head">
+          <div class="filters">
+            <select id="hist-setor"><option value="">Todos os setores</option>${Data.SETORES.map(s=>`<option value="${s}" ${h.filtroSetor===s?'selected':''}>${s}</option>`).join('')}</select>
+            <select id="hist-gestor"><option value="">Todos os gestores</option>${Object.values(Data.GESTORES).filter(Boolean).map(g=>`<option value="${g}" ${h.filtroGestor===g?'selected':''}>${g}</option>`).join('')}</select>
+            <select id="hist-situacao"><option value="">Todas as situações</option>${['Positivo','Atenção','Negativo','Zerado'].map(s=>`<option value="${s}" ${h.filtroSituacao===s?'selected':''}>${s}</option>`).join('')}</select>
+            <div class="search-box"><span class="ic">🔎</span><input type="text" id="hist-colaborador" placeholder="Buscar colaborador..." value="${h.filtroColaborador}"></div>
+            <button class="btn-clear-filters" id="hist-limpar">Limpar filtros</button>
+          </div>
+        </div>
+        <div class="table-scroll" id="hist-tabela-wrap"></div>
+        <div class="pagination" id="hist-tabela-pag"></div>
+      </div>
+
+      <div class="section-title"><h2>Comparar semanas</h2><span class="hint">Ex.: evolução individual entre duas semanas</span></div>
+      <div class="panel panel-body">
+        <div class="filters" style="margin-bottom:14px;">
+          <select id="cmp-colaborador">${Data.COLABORADORES.map(c=>`<option value="${c.id}">${c.nome} · ${c.setor}</option>`).join('')}</select>
+          <select id="cmp-semana-a">${History.listWeeks().map(w=>`<option value="${w}">Semana ${Report.formatSemana(w)}</option>`).join('')}</select>
+          <span style="color:var(--gray-400);">→</span>
+          <select id="cmp-semana-b">${History.listWeeks().map((w,i,arr)=>`<option value="${w}" ${i===arr.length-1?'selected':''}>Semana ${Report.formatSemana(w)}</option>`).join('')}</select>
+          <button class="btn btn-primary btn-sm" id="cmp-btn">Comparar</button>
+        </div>
+        <div id="cmp-resultado"></div>
+      </div>
+    `;
+
+    el.querySelectorAll('[data-week-chip]').forEach(chip => chip.addEventListener('click', () => {
+      h.filtroSemana = chip.getAttribute('data-week-chip'); h.page = 1; renderHistorico();
+    }));
+    document.getElementById('hist-setor').addEventListener('change', e => { h.filtroSetor = e.target.value; h.page=1; renderHistoricoTabela(); });
+    document.getElementById('hist-gestor').addEventListener('change', e => { h.filtroGestor = e.target.value; h.page=1; renderHistoricoTabela(); });
+    document.getElementById('hist-situacao').addEventListener('change', e => { h.filtroSituacao = e.target.value; h.page=1; renderHistoricoTabela(); });
+    document.getElementById('hist-colaborador').addEventListener('input', e => { h.filtroColaborador = e.target.value; h.page=1; renderHistoricoTabela(); });
+    document.getElementById('hist-limpar').addEventListener('click', () => {
+      Object.assign(h, {filtroSetor:'', filtroColaborador:'', filtroGestor:'', filtroSituacao:'', page:1});
+      renderHistorico();
+    });
+    document.getElementById('cmp-btn').addEventListener('click', renderComparador);
+
+    renderHistoricoTabela();
+  }
+
+  function renderHistoricoTabela(){
+    const h = state.historico;
+    const semana = h.filtroSemana;
+    const semanaAnterior = History.previousWeek(semana);
+
+    let linhas = Data.COLABORADORES.map(c => {
+      const atual = c.historico[semana];
+      const anterior = semanaAnterior ? c.historico[semanaAnterior] : null;
+      return {
+        id:c.id, nome:c.nome, setor:c.setor, gestor:c.gestor,
+        saldoAnterior: anterior ? anterior.saldoAtual : null,
+        saldoAtual: atual ? atual.saldoAtual : null,
+        horasPositivas: atual ? atual.horasPositivas : null,
+        horasNegativas: atual ? atual.horasNegativas : null,
+        variacao: atual ? atual.variacao : null,
+        situacao: atual ? atual.situacao : '—'
+      };
+    });
+
+    if (h.filtroSetor) linhas = linhas.filter(l => l.setor === h.filtroSetor);
+    if (h.filtroGestor) linhas = linhas.filter(l => l.gestor === h.filtroGestor);
+    if (h.filtroSituacao) linhas = linhas.filter(l => l.situacao === h.filtroSituacao);
+    if (h.filtroColaborador) linhas = linhas.filter(l => l.nome.toLowerCase().includes(h.filtroColaborador.toLowerCase()));
+
+    linhas = sortData(linhas, h.sortKey, h.sortDir);
+    const {itens, page, totalPages, total} = paginate(linhas, h.page, h.pageSize);
+
+    const wrap = document.getElementById('hist-tabela-wrap');
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr>
+          <th data-sort="nome">Colaborador ${sortIcon('nome', h)}</th>
+          <th data-sort="setor">Setor ${sortIcon('setor', h)}</th>
+          <th data-sort="gestor">Gestor ${sortIcon('gestor', h)}</th>
+          <th data-sort="saldoAnterior">Saldo anterior ${sortIcon('saldoAnterior', h)}</th>
+          <th data-sort="saldoAtual">Saldo atual ${sortIcon('saldoAtual', h)}</th>
+          <th>Horas +</th><th>Horas -</th>
+          <th data-sort="variacao">Variação ${sortIcon('variacao', h)}</th>
+          <th data-sort="situacao">Situação ${sortIcon('situacao', h)}</th>
+        </tr></thead>
+        <tbody>
+          ${itens.length ? itens.map(l => `
+            <tr onclick="App.openColaborador('${l.id}')">
+              <td><b>${l.nome}</b></td><td>${l.setor}</td><td>${l.gestor || '—'}</td>
+              <td>${Calc.formatHoras(l.saldoAnterior)}</td><td>${Calc.formatHoras(l.saldoAtual)}</td>
+              <td>${Calc.formatHoras(l.horasPositivas)}</td><td>${Calc.formatHoras(-Math.abs(l.horasNegativas||0))}</td>
+              <td>${variacaoSpan(l.variacao)}</td><td>${situacaoBadge(l.situacao)}</td>
+            </tr>`).join('') : `<tr><td colspan="9"><div class="table-empty">Nenhum registro encontrado para os filtros selecionados.</div></td></tr>`}
+        </tbody>
+      </table>`;
+
+    wrap.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', () => {
+      const key = th.getAttribute('data-sort');
+      if (h.sortKey === key) h.sortDir = h.sortDir === 'asc' ? 'desc' : 'asc';
+      else { h.sortKey = key; h.sortDir = 'asc'; }
+      renderHistoricoTabela();
+    }));
+
+    const pagEl = document.getElementById('hist-tabela-pag');
+    pagEl.innerHTML = `
+      <span class="pg-info">${total} registro(s) · página ${page} de ${totalPages}</span>
+      <button ${page<=1?'disabled':''} id="hist-pg-prev">‹ Anterior</button>
+      <button ${page>=totalPages?'disabled':''} id="hist-pg-next">Próxima ›</button>`;
+    pagEl.querySelector('#hist-pg-prev')?.addEventListener('click', () => { h.page--; renderHistoricoTabela(); });
+    pagEl.querySelector('#hist-pg-next')?.addEventListener('click', () => { h.page++; renderHistoricoTabela(); });
+  }
+
+  function renderComparador(){
+    const colabId = document.getElementById('cmp-colaborador').value;
+    const semanaA = document.getElementById('cmp-semana-a').value;
+    const semanaB = document.getElementById('cmp-semana-b').value;
+    const colaborador = Data.COLABORADORES.find(c => c.id === colabId);
+    const cmp = History.compareWeeks(colaborador, semanaA, semanaB);
+    const out = document.getElementById('cmp-resultado');
+    if (!cmp){ out.innerHTML = '<div class="empty-state">Não há dados suficientes para comparar.</div>'; return; }
+    out.innerHTML = `
+      <div class="evo-line">
+        <div><div style="font-size:12px;color:var(--gray-500);">Semana ${Report.formatSemana(semanaA)}</div><div class="big">${Calc.formatHoras(cmp.saldoA)}</div></div>
+        <div style="color:var(--gray-400);">→</div>
+        <div><div style="font-size:12px;color:var(--gray-500);">Semana ${Report.formatSemana(semanaB)}</div><div class="big">${Calc.formatHoras(cmp.saldoB)}</div></div>
+        <div style="margin-left:14px;">${variacaoSpan(cmp.variacao)}</div>
+      </div>
+      <p style="margin-top:10px;color:var(--gray-600);font-size:13px;"><b>${colaborador.nome}</b> — ${colaborador.setor} · Gestor: ${colaborador.gestor || '—'}</p>
+    `;
+  }
+
+  function renderRelatorios(){
+    const semana = state.semanaSelecionada;
+    const setor = state.relatoriosSetorSelecionado;
+    const el = document.getElementById('view-relatorios');
+
+    if (!semana || !History.listWeeks().length){
+      el.innerHTML = '<div class="loading-state"><div class="spinner"></div>Carregando dados...</div>';
+      return;
+    }
+
+    el.innerHTML = `
+      <div class="banner banner-info">Cada relatório é gerado e enviado de forma isolada por setor — o e-mail de um setor nunca contém dados de outro. O conteúdo enviado traz só o que existe na planilha (colaborador, cargo, saldo atual). Nenhum envio acontece automaticamente: ao clicar em "Enviar relatório", uma tela de confirmação mostra os destinatários e o conteúdo antes de enviar de fato.</div>
+      ${Data.APP_CONFIG.modoTeste ? `<div class="banner banner-warn"><b>Modo de teste ativo</b> — os envios abaixo vão para ${Data.APP_CONFIG.emailTeste || '(cadastre um e-mail de teste em Configurações)'}, não para o gestor real.</div>` : ''}
+      <div class="subtabs">
+        ${Data.SETORES.map(s => `<div class="subtab ${s===setor?'active':''}" data-rel-tab="${s}">${s}</div>`).join('')}
+      </div>
+
+      <div id="relatorio-preview"></div>
+
+      <div class="section-title"><h2>Envio individual por setor</h2><span class="hint">Semana ${Report.formatSemana(semana)}</span></div>
+      <div class="grid grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
+        ${Data.SETORES.map(s => `
+          <button class="btn btn-red btn-sm" style="width:100%;justify-content:center;" data-enviar-setor="${s}">Enviar relatório de ${s}</button>
+        `).join('')}
+      </div>
+      <div id="envio-status" style="margin-top:14px;"></div>
+    `;
+
+    el.querySelectorAll('[data-rel-tab]').forEach(tab => tab.addEventListener('click', () => {
+      state.relatoriosSetorSelecionado = tab.getAttribute('data-rel-tab');
+      renderRelatorios();
+    }));
+    el.querySelectorAll('[data-enviar-setor]').forEach(btn => btn.addEventListener('click', () => {
+      abrirConfirmacaoEnvio(btn.getAttribute('data-enviar-setor'));
+    }));
+
+    renderRelatorioPreview(setor, semana);
+  }
+
+  function renderRelatorioPreview(setor, semana){
+    const rep = Report.buildSectorReport(setor, semana);
+    const box = document.getElementById('relatorio-preview');
+    box.innerHTML = `
+      <div class="report-preview" style="margin-top:16px;">
+        <div class="report-header">
+          <div class="brand">ZUKKIN</div>
+          <h2>Relatório Semanal de Banco de Horas</h2>
+          <div class="meta">Setor: ${setor} · Gestor: ${rep.gestor || 'não cadastrado'} · Semana: ${Report.formatSemana(semana)}</div>
+        </div>
+        <div class="report-body">
+          <div class="report-summary">
+            <div><div class="lbl">Colaboradores</div><div class="val">${rep.resumo.totalColaboradores}</div></div>
+            <div><div class="lbl">Saldo positivo</div><div class="val">${Calc.formatHoras(rep.resumo.saldoPositivoTotal)}</div></div>
+            <div><div class="lbl">Saldo negativo</div><div class="val">${Calc.formatHoras(rep.resumo.saldoNegativoTotal)}</div></div>
+            <div><div class="lbl">Saldo geral</div><div class="val">${Calc.formatHoras(rep.resumo.saldoGeral)}</div></div>
+          </div>
+          <p style="font-size:11.5px;color:var(--gray-500);margin:-6px 0 12px;">Resumo e colunas abaixo são só para conferência do RH. O e-mail enviado ao gestor traz apenas Colaborador, Cargo e Saldo atual.</p>
+          <table class="data-table">
+            <thead><tr><th>Colaborador</th><th>Cargo</th><th>Saldo anterior</th><th>Saldo atual</th><th>Variação</th><th>Situação</th></tr></thead>
+            <tbody>
+              ${rep.tabela.map(l => `<tr><td>${l.nome}</td><td>${l.cargo || '—'}</td><td>${Calc.formatHoras(l.saldoAnterior)}</td><td>${Calc.formatHoras(l.saldoAtual)}</td><td>${variacaoSpan(l.variacao)}</td><td>${situacaoBadge(l.situacao)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+          ${rep.pontosDeAtencao.length ? `
+            <div class="report-note"><b>Observações / Pontos de atenção (uso interno):</b> ${rep.pontosDeAtencao.map(p => `${p.nome} — ${p.tipo}`).join('; ')}.</div>
+          ` : ''}
+          <div style="margin-top:16px;display:flex;gap:10px;">
+            <button class="btn btn-outline btn-sm" onclick="Report.exportSectorCSV('${setor}','${semana}')">Exportar CSV</button>
+            <button class="btn btn-outline btn-sm" onclick="App.imprimirRelatorio('${setor}','${semana}')">Imprimir / salvar PDF</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // Nenhum e-mail sai sem passar por aqui primeiro: mostra exatamente quem
+  // vai receber e o conteúdo do e-mail, e só envia depois de confirmação
+  // manual — clicar em "Enviar relatório" nunca dispara o envio direto.
+  function abrirConfirmacaoEnvio(setor){
+    const semana = state.semanaSelecionada;
+    const rep = Report.buildSectorReport(setor, semana);
+    const modoTeste = !!Data.APP_CONFIG.modoTeste;
+    const destinatarios = modoTeste ? [Data.APP_CONFIG.emailTeste].filter(Boolean) : EmailModule.getDestinatarios(setor);
+
+    const box = document.getElementById('modal-box');
+    box.innerHTML = `
+      <div class="modal-head">
+        <div>
+          <h2>Confirmar envio — ${setor}</h2>
+          <div class="sub">Semana ${Report.formatSemana(semana)} · nada é enviado antes desta confirmação</div>
+        </div>
+        <button class="modal-close" id="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        ${modoTeste ? `<div class="banner banner-warn">Modo de teste ativo — este e-mail vai para o seu e-mail de teste, não para o gestor real.</div>` : ''}
+        <div class="banner banner-info">
+          <div>
+            <b>Destinatários (${destinatarios.length}):</b>
+            ${destinatarios.length ? destinatarios.map(e => `<div>• ${e}</div>`).join('') : '<div>Nenhum e-mail cadastrado — cadastre em <b>E-mails</b> (gestor do setor) ou em <b>Configurações</b> (seu e-mail, para o modo de teste) antes de enviar.</div>'}
+          </div>
+        </div>
+        <h3 style="font-size:13px;margin:14px 0 8px;">Conteúdo exato do e-mail (só o que existe na planilha)</h3>
+        <table class="data-table">
+          <thead><tr><th>Colaborador</th><th>Cargo</th><th>Saldo atual</th></tr></thead>
+          <tbody>
+            ${rep.tabela.map(l => `<tr><td>${l.nome}</td><td>${l.cargo || '—'}</td><td>${Calc.formatHoras(l.saldoAtual)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+        <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end;">
+          <button class="btn btn-outline" id="btn-cancelar-envio">Cancelar</button>
+          <button class="btn btn-red" id="btn-confirmar-envio" ${destinatarios.length ? '' : 'disabled'}>Confirmar e enviar</button>
+        </div>
+      </div>
+    `;
+    document.getElementById('modal-overlay').classList.add('open');
+    document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+    document.getElementById('btn-cancelar-envio').addEventListener('click', closeModal);
+    document.getElementById('btn-confirmar-envio').addEventListener('click', () => {
+      closeModal();
+      enviarRelatorioConfirmado(setor);
+    });
+  }
+
+  function enviarRelatorioConfirmado(setor){
+    const semana = state.semanaSelecionada;
+    const status = document.getElementById('envio-status');
+    status.innerHTML = `<div class="banner banner-info"><div class="spinner" style="width:14px;height:14px;margin:0;"></div> Enviando relatório de ${setor}...</div>`;
+    EmailModule.enviarRelatorioSetor(setor, semana)
+      .then(() => {
+        toast(`Relatório de ${setor} enviado com sucesso.`, 'success');
+        status.innerHTML = `<div class="banner banner-info">Envio de ${setor} concluído.</div>`;
+      })
+      .catch((err) => {
+        toast(`Envio de ${setor} pendente: ${err.mensagem || 'falha no envio.'}`, 'error');
+        status.innerHTML = `<div class="banner banner-warn"><b>Relatório de ${setor} não enviado.</b><br>${err.mensagem || 'Configure o Power Automate em Configurações.'}</div>`;
+      });
+  }
+
+  function imprimirRelatorio(setor, semana){
+    const rep = Report.buildSectorReport(setor, semana);
+    const win = window.open('', '_blank');
+    win.document.write(`<html><head><title>Relatório ${setor}</title></head><body>${Report.renderReportHTML(rep)}</body></html>`);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 300);
+  }
+
+  function renderEmails(){
+    const el = document.getElementById('view-emails');
+    el.innerHTML = `
+      <div class="banner banner-info">Cadastre o gestor e os destinatários adicionais de cada setor. Os relatórios são enviados exclusivamente para os e-mails cadastrados no setor correspondente. Esse cadastro fica salvo no banco de dados (Firestore) — qualquer computador que abrir este painel vê e pode editar os mesmos cadastros.</div>
+      <div class="grid grid-2">
+        ${Data.SETORES.map(setor => {
+          const cfg = Data.EMAIL_CONFIG[setor];
+          return `
+          <div class="email-card">
+            <h4>${setor}</h4>
+            <div class="field-row"><label>Gestor responsável</label><input type="text" data-email-field="gestorNome" data-setor="${setor}" value="${cfg.gestorNome}"></div>
+            <div class="field-row"><label>E-mail do gestor</label><input type="email" data-email-field="gestorEmail" data-setor="${setor}" value="${cfg.gestorEmail}"></div>
+            <div class="field-row">
+              <label>E-mails adicionais</label>
+              <div class="chip-list" data-chip-list="${setor}">
+                ${cfg.adicionais.map((em,i) => `<span class="chip">${em}<button data-remove-email="${setor}" data-idx="${i}">✕</button></span>`).join('')}
+              </div>
+              <div style="display:flex;gap:6px;margin-top:8px;">
+                <input type="email" placeholder="adicionar@zukkin.com" data-novo-email="${setor}" style="flex:1;">
+                <button class="btn btn-outline btn-sm" data-add-email="${setor}">Adicionar</button>
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    `;
+
+    el.querySelectorAll('input[data-email-field]').forEach(inp => inp.addEventListener('change', () => {
+      const setor = inp.getAttribute('data-setor');
+      EmailModule.updateConfig(setor, {[inp.getAttribute('data-email-field')]: inp.value});
+      toast(`Dados de ${setor} atualizados.`, 'success');
+    }));
+    el.querySelectorAll('[data-add-email]').forEach(btn => btn.addEventListener('click', () => {
+      const setor = btn.getAttribute('data-add-email');
+      const input = el.querySelector(`input[data-novo-email="${setor}"]`);
+      const email = input.value.trim();
+      if (!email || !email.includes('@')){ toast('Informe um e-mail válido.', 'error'); return; }
+      Data.EMAIL_CONFIG[setor].adicionais.push(email);
+      Data.persist();
+      renderEmails();
+      toast(`E-mail adicionado ao setor ${setor}.`, 'success');
+    }));
+    el.querySelectorAll('[data-remove-email]').forEach(btn => btn.addEventListener('click', () => {
+      const setor = btn.getAttribute('data-remove-email');
+      const idx = Number(btn.getAttribute('data-idx'));
+      Data.EMAIL_CONFIG[setor].adicionais.splice(idx,1);
+      Data.persist();
+      renderEmails();
+    }));
+  }
+
+  function renderConfig(){
+    const el = document.getElementById('view-config');
+    const cfg = Data.SOURCE_CONFIG;
+    const app = Data.APP_CONFIG;
+    const dias = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
+
+    el.innerHTML = `
+      <div class="config-grid">
+
+        <div class="panel panel-body">
+          <h3 style="font-size:14px;margin-bottom:14px;">Fonte de dados</h3>
+          <div class="field-row"><label>Planilha do Google Sheets</label><input type="text" disabled value="${cfg.fileTitle}"></div>
+          <div class="field-row"><label>Dia da atualização semanal</label>
+            <select id="cfg-dia">${dias.map((d,i) => `<option value="${i}" ${cfg.diaAtualizacao===i?'selected':''}>${d}</option>`).join('')}</select>
+          </div>
+          <p style="font-size:11.5px;color:var(--gray-500);margin-top:6px;">Os dados são lidos automaticamente direto do Google Sheets (arquivo público por link) a cada vez que o painel é aberto — não é preciso importar nada manualmente.</p>
+          <button class="btn btn-primary btn-sm" id="cfg-salvar-fonte" style="margin-top:10px;">Salvar</button>
+          <div style="margin-top:16px;border-top:1px solid var(--gray-150);padding-top:14px;">
+            <label style="font-size:11.5px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:6px;">Alternativa: importar arquivo manualmente</label>
+            <input type="file" id="cfg-arquivo-manual" accept=".xlsx,.xls">
+            <p style="font-size:11px;color:var(--gray-500);margin-top:6px;">Use isso só se a atualização automática parar de funcionar (ex.: se a planilha deixar de estar pública).</p>
+          </div>
+        </div>
+
+        <div class="panel panel-body">
+          <h3 style="font-size:14px;margin-bottom:14px;">Atualização</h3>
+          <div class="field-row"><label>Última atualização</label><input type="text" disabled value="Semana ${Report.formatSemana(History.currentWeek())}"></div>
+          <div class="field-row"><label>Próxima atualização prevista</label><input type="text" disabled value="Semana ${Report.formatSemana(History.nextScheduledWeek())}"></div>
+          <div class="field-row"><label>Status da última leitura</label><input type="text" disabled id="cfg-status-import" value="${Import.getStatus()}"></div>
+          <button class="btn btn-red btn-sm" id="cfg-atualizar-manual" style="margin-top:6px;">Atualizar agora</button>
+          <div id="cfg-import-feedback" style="margin-top:12px;">${state.cfgFeedback ? `<div class="banner banner-${state.cfgFeedback.tipo}">${state.cfgFeedback.html}</div>` : ''}</div>
+        </div>
+
+        <div class="panel panel-body">
+          <h3 style="font-size:14px;margin-bottom:14px;">Envio de relatórios (Power Automate)</h3>
+          <p style="font-size:11.5px;color:var(--gray-500);margin:-4px 0 12px;">Nenhum e-mail sai automaticamente: em <b>Relatórios</b>, "Enviar relatório" sempre abre uma tela de confirmação com os destinatários antes do envio de fato.</p>
+          <div class="field-row"><label>URL do fluxo HTTP</label><input type="text" id="cfg-pa-url" value="${app.powerAutomateUrl}" placeholder="https://prod-00.brazilsouth.logic.azure.com/..."></div>
+          <div class="field-row"><label>Seu e-mail (RH)</label><input type="email" id="cfg-email-teste" value="${app.emailTeste}" placeholder="seu-email@zukkin.com"></div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--gray-700);cursor:pointer;margin-top:6px;">
+            <input type="checkbox" id="cfg-modo-teste" ${app.modoTeste ? 'checked' : ''} style="width:auto;">
+            Modo de teste — redirecionar os envios para o seu e-mail em vez do gestor
+          </label>
+          <button class="btn btn-primary btn-sm" id="cfg-salvar-email" style="margin-top:10px;">Salvar</button>
+        </div>
+
+        <div class="panel panel-body">
+          <h3 style="font-size:14px;margin-bottom:14px;">Setores</h3>
+          <table class="data-table">
+            <thead><tr><th>Setor</th><th>Gestor responsável</th></tr></thead>
+            <tbody>${Data.SETORES.map(s => `<tr><td>${s}</td><td>${Data.GESTORES[s] || '—'}</td></tr>`).join('')}</tbody>
+          </table>
+          <p style="font-size:11.5px;color:var(--gray-500);margin-top:10px;">Os dados de cada setor nunca são combinados na visualização ou no envio de relatórios. Edite os gestores em E-mails.</p>
+        </div>
+
+        <div class="panel panel-body">
+          <h3 style="font-size:14px;margin-bottom:14px;">Exportar relatório</h3>
+          <div class="field-row"><label>Setor</label>
+            <select id="cfg-export-setor">${Data.SETORES.map(s=>`<option value="${s}">${s}</option>`).join('')}</select>
+          </div>
+          <div class="field-row"><label>Semana</label>
+            <select id="cfg-export-semana">${History.listWeeks().map(w=>`<option value="${w}" ${w===state.semanaSelecionada?'selected':''}>Semana ${Report.formatSemana(w)}</option>`).join('')}</select>
+          </div>
+          <button class="btn btn-outline btn-sm" id="cfg-export-btn">Exportar CSV</button>
+        </div>
+
+        <div class="panel panel-body" style="grid-column:1 / -1;">
+          <h3 style="font-size:14px;margin-bottom:14px;">Histórico de semanas</h3>
+          <p style="font-size:12.5px;color:var(--gray-600);margin-bottom:10px;">O sistema preserva permanentemente todas as semanas já registradas — nenhuma atualização apaga ou sobrescreve dados anteriores.</p>
+          <div class="filters">
+            ${History.listWeeks().length ? History.listWeeks().map(w => `<span class="chip">Semana ${Report.formatSemana(w)}</span>`).join('') : '<span style="color:var(--gray-500);font-size:12.5px;">Nenhuma semana registrada ainda.</span>'}
+          </div>
+        </div>
+
+      </div>
+    `;
+
+    document.getElementById('cfg-salvar-fonte').addEventListener('click', () => {
+      Data.SOURCE_CONFIG.diaAtualizacao = Number(document.getElementById('cfg-dia').value);
+      Data.persist();
+      toast('Configuração salva.', 'success');
+    });
+
+    document.getElementById('cfg-arquivo-manual').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const fb = document.getElementById('cfg-import-feedback');
+      fb.innerHTML = `<div class="banner banner-info"><div class="spinner" style="width:14px;height:14px;margin:0;"></div> Lendo o arquivo selecionado...</div>`;
+      Import.atualizarDeArquivo(file).then(res => {
+        if (res.ok){
+          state.cfgFeedback = {tipo:'info', html:`Importação concluída — semana ${Report.formatSemana(res.semana)}.${res.avisos && res.avisos.length ? ' ' + res.avisos.length + ' aviso(s): ' + res.avisos.slice(0,5).join(' · ') : ''}`};
+          state.semanaSelecionada = History.currentWeek();
+          refreshGlobalWeekOptions();
+          updateTopbarMeta();
+        } else {
+          state.cfgFeedback = {tipo:'warn', html:`Erro na importação: ${res.erro}`};
+        }
+        renderConfig();
+      });
+    });
+
+    document.getElementById('cfg-salvar-email').addEventListener('click', () => {
+      Data.APP_CONFIG.powerAutomateUrl = document.getElementById('cfg-pa-url').value.trim();
+      Data.APP_CONFIG.emailTeste = document.getElementById('cfg-email-teste').value.trim();
+      Data.APP_CONFIG.modoTeste = document.getElementById('cfg-modo-teste').checked;
+      Data.persist();
+      toast('Configuração de e-mail salva.', 'success');
+    });
+
+    document.getElementById('cfg-atualizar-manual').addEventListener('click', () => {
+      const fb = document.getElementById('cfg-import-feedback');
+      fb.innerHTML = `<div class="banner banner-info"><div class="spinner" style="width:14px;height:14px;margin:0;"></div> Lendo a planilha...</div>`;
+      document.getElementById('cfg-status-import').value = 'loading';
+      atualizarAgora().then(res => {
+        if (res.ok){
+          state.cfgFeedback = {tipo:'info', html:`Atualização concluída — semana ${Report.formatSemana(res.semana)}. O dashboard e os setores já refletem os novos dados.${res.avisos && res.avisos.length ? ' ' + res.avisos.length + ' aviso(s): ' + res.avisos.slice(0,5).join(' · ') : ''}`};
+        } else {
+          state.cfgFeedback = {tipo:'warn', html:`Erro na atualização: ${res.erro}`};
+        }
+        renderConfig();
+      });
+    });
+
+    document.getElementById('cfg-export-btn').addEventListener('click', () => {
+      Report.exportSectorCSV(document.getElementById('cfg-export-setor').value, document.getElementById('cfg-export-semana').value);
+    });
+  }
+
+  function openColaborador(id){
+    const c = Data.COLABORADORES.find(x => x.id === id);
+    if (!c) return;
+    const semanas = History.listWeeks();
+    const atual = c.historico[state.semanaSelecionada] || c.historico[semanas[semanas.length-1]];
+    if (!atual) return;
+    const classif = Calc.calcClassificacao(atual.saldoAtual);
+
+    let acumPositivo = 0, acumNegativo = 0;
+    semanas.forEach(w => { const d = c.historico[w]; if (d){ acumPositivo += d.horasPositivas; acumNegativo += d.horasNegativas; } });
+
+    const box = document.getElementById('modal-box');
+    box.innerHTML = `
+      <div class="modal-head">
+        <div>
+          <h2>${c.nome}</h2>
+          <div class="sub">${c.setor}${c.cargo ? ' · ' + c.cargo : ''} · Gestor: ${c.gestor || '—'}</div>
+        </div>
+        <button class="modal-close" id="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;">
+          <div>
+            <div style="font-size:11.5px;color:var(--gray-500);">Saldo atual (semana ${Report.formatSemana(atual.semana)})</div>
+            <div style="font-size:26px;font-weight:700;">${Calc.formatHoras(atual.saldoAtual)}</div>
+          </div>
+          <span class="badge ${Calc.badgeClass(atual.situacao)}" style="font-size:12.5px;padding:6px 14px;">${classif.label}</span>
+          <div style="margin-left:auto;">${variacaoSpan(atual.variacao)} <span style="color:var(--gray-400);font-size:12px;">na semana</span></div>
+        </div>
+
+        <div class="grid grid-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px;">
+          <div class="card accent-green"><h3>Horas positivas acumuladas</h3><div class="kpi" style="font-size:19px;">${Calc.formatHoras(acumPositivo)}</div></div>
+          <div class="card accent-red"><h3>Horas negativas acumuladas</h3><div class="kpi" style="font-size:19px;">${Calc.formatHoras(-Math.abs(acumNegativo))}</div></div>
+          <div class="card"><h3>Situação atual</h3><div class="kpi" style="font-size:19px;">${atual.situacao}</div></div>
+        </div>
+
+        <div class="panel chart-card" style="margin-bottom:18px;">
+          <div class="panel-head" style="padding:0 0 10px;border:none;"><h3>Evolução do banco de horas</h3></div>
+          <div class="chart-box" style="height:220px;"><canvas id="chart-colaborador-modal"></canvas></div>
+        </div>
+
+        <h3 style="font-size:13.5px;margin-bottom:10px;">Histórico completo</h3>
+        <table class="data-table">
+          <thead><tr><th>Semana</th><th>Saldo anterior</th><th>Saldo atual</th><th>Horas +</th><th>Horas -</th><th>Variação</th><th>Situação</th></tr></thead>
+          <tbody>
+            ${semanas.map(w => { const d = c.historico[w]; if(!d) return ''; return `
+              <tr>
+                <td>${Report.formatSemana(w)}</td>
+                <td>${Calc.formatHoras(d.saldoAnterior)}</td>
+                <td>${Calc.formatHoras(d.saldoAtual)}</td>
+                <td>${Calc.formatHoras(d.horasPositivas)}</td>
+                <td>${Calc.formatHoras(-Math.abs(d.horasNegativas))}</td>
+                <td>${variacaoSpan(d.variacao)}</td>
+                <td>${situacaoBadge(d.situacao)}</td>
+              </tr>`; }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    document.getElementById('modal-overlay').classList.add('open');
+    document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+
+    Charts.evolucaoColaborador('chart-colaborador-modal', semanas, semanas.map(w => c.historico[w] ? c.historico[w].saldoAtual : null));
+  }
+
+  function closeModal(){
+    document.getElementById('modal-overlay').classList.remove('open');
+  }
+
+  // Autentica anonimamente no Firebase (necessário para as regras do
+  // Firestore liberarem leitura/escrita) e só então carrega o estado
+  // salvo — sem isso, Data.carregarAsync() falharia silenciosamente.
+  function autenticarEcarregar(){
+    return new Promise((resolve) => {
+      auth.onAuthStateChanged(async (user) => {
+        if (!user){
+          try { await auth.signInAnonymously(); } catch(e){ console.warn('[App] Falha na autenticação anônima', e); resolve(); return; }
+          return; // onAuthStateChanged será chamado de novo já com o usuário
+        }
+        await Data.carregarAsync();
+        resolve();
+      });
+    });
+  }
+
+  async function init(){
+    wireNav();
+    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+      if (e.target.id === 'modal-overlay') closeModal();
+    });
+
+    await autenticarEcarregar();
+
+    if (History.listWeeks().length){
+      state.semanaSelecionada = History.currentWeek();
+    }
+
+    wireGlobalWeekSelect();
+    updateTopbarMeta();
+    goTo('dashboard');
+
+    atualizarAgora();
+  }
+
+  return { goTo, openColaborador, closeModal, imprimirRelatorio, atualizarAgora, init };
+})();
+
+document.addEventListener('DOMContentLoaded', App.init);
+</script>
+
+</body>
+</html>

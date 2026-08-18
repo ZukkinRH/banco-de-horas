@@ -1,0 +1,12 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Só sessões autenticadas podem ler/escrever — inclusive a sessão
+    // anônima que o próprio painel cria automaticamente, sem tela de
+    // login. Isso não é "acesso público": só quem abre o link do
+    // painel (hospedado no GitHub Pages) recebe essa sessão anônima.
+    match /estado/{docId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
