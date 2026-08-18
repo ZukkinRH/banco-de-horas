@@ -1124,16 +1124,20 @@ const EmailModule = (function(){
 
   function _endpointEnvioRelatorio(payload){
     if (!Data.APP_CONFIG.powerAutomateUrl){
-      return Promise.reject({ok:false, integrado:false, mensagem:'Configure a URL do Power Automate em Configurações antes de enviar.'});
+      return Promise.reject({ok:false, integrado:false, mensagem:'Configure a URL do serviço de envio em Configurações antes de enviar.'});
     }
+    // Sem header Content-Type explícito de propósito: assim o navegador usa
+    // "text/plain" por padrão, o que evita o preflight OPTIONS — o Google
+    // Apps Script (e a maioria dos serviços simples de webhook) não lida
+    // bem com esse preflight. O servidor faz JSON.parse do corpo mesmo assim.
     return fetch(Data.APP_CONFIG.powerAutomateUrl, {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      method:'POST', body: JSON.stringify(payload)
     }).then(resp => {
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       return {ok:true};
     }).catch(err => Promise.reject({
       ok:false, integrado:true,
-      mensagem:'Falha ao chamar o Power Automate: ' + (err && err.message ? err.message : err)
+      mensagem:'Falha ao chamar o serviço de envio: ' + (err && err.message ? err.message : err)
     }));
   }
 
@@ -1998,7 +2002,7 @@ const App = (function(){
       })
       .catch((err) => {
         toast(`Envio de ${setor} pendente: ${err.mensagem || 'falha no envio.'}`, 'error');
-        status.innerHTML = `<div class="banner banner-warn"><b>Relatório de ${setor} não enviado.</b><br>${err.mensagem || 'Configure o Power Automate em Configurações.'}</div>`;
+        status.innerHTML = `<div class="banner banner-warn"><b>Relatório de ${setor} não enviado.</b><br>${err.mensagem || 'Configure o serviço de envio em Configurações.'}</div>`;
       });
   }
 
@@ -2096,9 +2100,9 @@ const App = (function(){
         </div>
 
         <div class="panel panel-body">
-          <h3 style="font-size:14px;margin-bottom:14px;">Envio de relatórios (Power Automate)</h3>
+          <h3 style="font-size:14px;margin-bottom:14px;">Envio de relatórios (Google Apps Script)</h3>
           <p style="font-size:11.5px;color:var(--gray-500);margin:-4px 0 12px;">Nenhum e-mail sai automaticamente: em <b>Relatórios</b>, "Enviar relatório" sempre abre uma tela de confirmação com os destinatários antes do envio de fato.</p>
-          <div class="field-row"><label>URL do fluxo HTTP</label><input type="text" id="cfg-pa-url" value="${app.powerAutomateUrl}" placeholder="https://prod-00.brazilsouth.logic.azure.com/..."></div>
+          <div class="field-row"><label>URL do serviço de envio (Web App)</label><input type="text" id="cfg-pa-url" value="${app.powerAutomateUrl}" placeholder="https://script.google.com/macros/s/XXXX/exec"></div>
           <div class="field-row"><label>Seu e-mail (RH)</label><input type="email" id="cfg-email-teste" value="${app.emailTeste}" placeholder="seu-email@zukkin.com"></div>
           <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--gray-700);cursor:pointer;margin-top:6px;">
             <input type="checkbox" id="cfg-modo-teste" ${app.modoTeste ? 'checked' : ''} style="width:auto;">
