@@ -551,11 +551,62 @@ const Data = (function(){
     });
   }
 
+  // ---- Cadastro de colaboradores (o sistema é a fonte da verdade) ----
+
+  // Normaliza um nome para comparação: sem acentos, sem espaços duplos,
+  // minúsculo. É assim que a importação casa o nome vindo da VR Ponto Mais
+  // com o colaborador já cadastrado, tolerando diferenças de acentuação.
+  function normalizarNome(nome){
+    return String(nome||'').normalize('NFD').replace(/[̀-ͯ]/g,'')
+      .replace(/\s+/g,' ').trim().toLowerCase();
+  }
+
+  function acharPorNome(nome){
+    const alvo = normalizarNome(nome);
+    return COLABORADORES.find(c => normalizarNome(c.nome) === alvo) || null;
+  }
+
+  function adicionarColaborador(nome, setor, cargo){
+    if (!nome || !String(nome).trim()) return {ok:false, mensagem:'Informe o nome do colaborador.'};
+    if (SETORES.indexOf(setor) === -1) return {ok:false, mensagem:'Setor inválido.'};
+    const existente = acharPorNome(nome);
+    if (existente) return {ok:false, mensagem:`${existente.nome} já está cadastrado em ${existente.setor}.`};
+    COLABORADORES.push({
+      id: slug(setor) + '__' + slug(nome),
+      nome: String(nome).trim(), cargo: cargo || '', setor,
+      gestor: (EMAIL_CONFIG[setor]||{}).gestorNome || '', historico: {}
+    });
+    persist();
+    return {ok:true};
+  }
+
+  function removerColaborador(id){
+    const i = COLABORADORES.findIndex(c => c.id === id);
+    if (i === -1) return {ok:false, mensagem:'Colaborador não encontrado.'};
+    COLABORADORES.splice(i, 1);
+    persist();
+    return {ok:true};
+  }
+
+  // Move de setor preservando todo o histórico. O id embute o setor, então
+  // ele é recalculado — por isso o histórico é copiado junto explicitamente.
+  function moverColaborador(id, novoSetor){
+    const c = COLABORADORES.find(x => x.id === id);
+    if (!c) return {ok:false, mensagem:'Colaborador não encontrado.'};
+    if (SETORES.indexOf(novoSetor) === -1) return {ok:false, mensagem:'Setor inválido.'};
+    c.setor = novoSetor;
+    c.id = slug(novoSetor) + '__' + slug(c.nome);
+    c.gestor = (EMAIL_CONFIG[novoSetor]||{}).gestorNome || '';
+    persist();
+    return {ok:true};
+  }
+
   return {
     SETORES, GESTORES, EMAIL_CONFIG, SOURCE_CONFIG, APP_CONFIG,
     get COLABORADORES(){ return COLABORADORES; },
     get SEMANAS(){ return SEMANAS; },
-    persist, carregarAsync, slug, aplicarImportacao
+    persist, carregarAsync, slug, aplicarImportacao,
+    normalizarNome, acharPorNome, adicionarColaborador, removerColaborador, moverColaborador
   };
 })();
 </script>
@@ -952,15 +1003,98 @@ const Import = (function(){
     return workbookParaAOA(wb);
   }
 
-  async function processarESalvar(sheetsAOA){
-    const { linhas, avisos } = parseWorkbook(sheetsAOA);
-    if (linhas.length === 0) throw new Error('Nenhum colaborador foi reconhecido na planilha.');
-    const semana = identificarSemanaReferencia();
-    Data.aplicarImportacao(linhas, semana);
+  // ---- Formato VR Ponto Mais ----
+  // O relatório "Banco de horas (período)" é uma tabela única com uma
+  // coluna "Nome" e uma coluna "Saldo BH" — sem setor. O setor vem do
+  // cadastro de colaboradores do próprio sistema, casando pelo nome.
+  function parsePontoMais(sheetsAOA){
+    const linhas = [], avisos = [];
+    let achouCabecalho = false;
+
+    sheetsAOA.forEach(({name, aoa}) => {
+      let colNome = -1, colSaldo = -1, linhaCabecalho = -1;
+      for (let r = 0; r < aoa.length && linhaCabecalho === -1; r++){
+        const row = aoa[r] || [];
+        for (let c = 0; c < row.length; c++){
+          const v = normTxt(row[c]);
+          if (v === 'nome' || v === 'colaborador') colNome = c;
+          if (v === 'saldo bh' || v === 'saldo atual' || v === 'saldo') colSaldo = c;
+        }
+        if (colNome !== -1 && colSaldo !== -1) linhaCabecalho = r;
+        else { colNome = -1; colSaldo = -1; }
+      }
+      if (linhaCabecalho === -1) return;
+      achouCabecalho = true;
+
+      for (let r = linhaCabecalho + 1; r < aoa.length; r++){
+        const row = aoa[r] || [];
+        const nome = String(row[colNome] || '').trim();
+        if (!nome) continue;
+        if (normTxt(nome) === 'totais' || normTxt(nome) === 'total') break;
+        const saldo = parseSaldo(row[colSaldo]);
+        if (saldo === null){ avisos.push(`Saldo ilegível para "${nome}" — ignorado.`); continue; }
+        linhas.push({ nome, saldoAtual: saldo });
+      }
+    });
+
+    if (!achouCabecalho){
+      throw new Error('Não encontrei as colunas "Nome" e "Saldo BH" no arquivo. Confirme que é o relatório "Banco de horas (período)" exportado da VR Ponto Mais.');
+    }
+    return { linhas, avisos };
+  }
+
+  // Aplica os saldos casando pelo NOME com o cadastro do sistema.
+  // Quem não estiver cadastrado é ignorado e reportado como aviso —
+  // nunca criamos colaborador automaticamente, porque o arquivo da
+  // VR Ponto Mais não diz a que setor a pessoa pertence.
+  function aplicarPorNome(linhas, semana){
+    const aplicadas = [], naoEncontrados = [];
+    const paraAplicar = [];
+
+    linhas.forEach(l => {
+      const c = Data.acharPorNome(l.nome);
+      if (!c){ naoEncontrados.push(l.nome); return; }
+      paraAplicar.push({ nome: c.nome, setor: c.setor, cargo: c.cargo, saldoAtual: l.saldoAtual });
+      aplicadas.push(c.nome);
+    });
+
+    if (paraAplicar.length) Data.aplicarImportacao(paraAplicar, semana);
+    return { aplicadas, naoEncontrados };
+  }
+
+  async function processarESalvar(sheetsAOA, semanaEscolhida){
+    const semana = semanaEscolhida || identificarSemanaReferencia();
+
+    // Tenta primeiro o formato da VR Ponto Mais (tabela Nome + Saldo BH).
+    // Se não reconhecer, cai no formato antigo de blocos por setor.
+    let resultado;
+    try{
+      const { linhas, avisos } = parsePontoMais(sheetsAOA);
+      if (!linhas.length) throw new Error('Nenhum colaborador foi lido do arquivo.');
+      const { aplicadas, naoEncontrados } = aplicarPorNome(linhas, semana);
+      if (!aplicadas.length){
+        throw new Error('Nenhum dos ' + linhas.length + ' nomes do arquivo bate com os colaboradores cadastrados. Cadastre-os em Configurações → Colaboradores (o nome precisa ser igual ao da VR Ponto Mais).');
+      }
+      if (naoEncontrados.length){
+        avisos.push('Não cadastrados (ignorados): ' + naoEncontrados.join(', '));
+      }
+      resultado = {total: aplicadas.length, avisos};
+    }catch(errPontoMais){
+      // Formato antigo: blocos "Banco de Horas - <Setor>" por aba.
+      let linhasBloco, avisosBloco;
+      try{
+        const r = parseWorkbook(sheetsAOA);
+        linhasBloco = r.linhas; avisosBloco = r.avisos;
+      }catch(e){ throw errPontoMais; }
+      if (!linhasBloco || !linhasBloco.length) throw errPontoMais;
+      Data.aplicarImportacao(linhasBloco, semana);
+      resultado = {total: linhasBloco.length, avisos: avisosBloco};
+    }
+
     History.addWeek(semana);
     Data.SOURCE_CONFIG.ultimaAtualizacao = semana;
     await Data.persist();
-    return {ok:true, semana, totalColaboradores: linhas.length, avisos};
+    return {ok:true, semana, totalColaboradores: resultado.total, avisos: resultado.avisos};
   }
 
   // Atualização automática — usada na abertura do painel e no botão
@@ -978,15 +1112,14 @@ const Import = (function(){
     }
   }
 
-  // Alternativa manual — caso a planilha alguma vez pare de estar
-  // acessível publicamente, o RH pode selecionar o arquivo .xlsx
-  // exportado manualmente do Google Sheets.
-  async function atualizarDeArquivo(file){
+  // Importação a partir do arquivo baixado da VR Ponto Mais
+  // (Relatórios → Banco de horas (período) → Baixar em Excel).
+  async function atualizarDeArquivo(file, semanaEscolhida){
     status = 'loading';
     try{
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, {type:'array'});
-      const resultado = await processarESalvar(workbookParaAOA(wb));
+      const resultado = await processarESalvar(workbookParaAOA(wb), semanaEscolhida);
       status = 'success';
       return resultado;
     }catch(e){
@@ -995,7 +1128,10 @@ const Import = (function(){
     }
   }
 
-  return { getStatus, identificarSemanaReferencia, atualizarDaPlanilha, atualizarDeArquivo };
+  // atualizarDaPlanilha NÃO é exportada de propósito: a planilha do Google
+  // Sheets deixou de ser a fonte da verdade e ninguém deve chamá-la, sob
+  // risco de sobrescrever os dados gravados no banco.
+  return { getStatus, identificarSemanaReferencia, atualizarDeArquivo };
 })();
 </script>
 
@@ -1436,21 +1572,25 @@ const App = (function(){
     return `<span class="${cls}">${seta} ${Calc.formatHoras(v)}</span>`;
   }
 
+  // Recarrega o estado direto do banco de dados (Firestore).
+  // ATENÇÃO: isto NÃO lê mais a planilha do Google Sheets. O banco de dados
+  // é a fonte da verdade do sistema — os saldos entram por importação do
+  // relatório da VR Ponto Mais (ver Configurações) e ficam gravados aqui.
   function atualizarAgora(){
-    return Import.atualizarDaPlanilha().then(res => {
-      if (res.ok){
-        state.ultimoErroImport = null;
-        state.semanaSelecionada = History.currentWeek();
-        refreshGlobalWeekOptions();
-        updateTopbarMeta();
-        if (document.getElementById(`view-${state.view}`)) goTo(state.view);
-        toast(`Dados atualizados (semana ${Report.formatSemana(res.semana)})${res.avisos && res.avisos.length ? ' · ' + res.avisos.length + ' aviso(s)' : ''}.`, 'success');
-      } else {
-        state.ultimoErroImport = res.erro;
-        toast('Não foi possível atualizar da planilha: ' + res.erro, 'error');
-        if (!History.listWeeks().length && document.getElementById(`view-${state.view}`)) goTo(state.view);
-      }
-      return res;
+    return Data.carregarAsync().then(() => {
+      state.ultimoErroImport = null;
+      if (History.listWeeks().length) state.semanaSelecionada = History.currentWeek();
+      refreshGlobalWeekOptions();
+      updateTopbarMeta();
+      if (document.getElementById(`view-${state.view}`)) goTo(state.view);
+      toast('Dados recarregados do banco.', 'success');
+      return {ok:true, semana: History.currentWeek()};
+    }).catch(err => {
+      const msg = (err && err.message) ? err.message : String(err);
+      state.ultimoErroImport = 'Falha ao ler o banco de dados: ' + msg;
+      toast('Falha ao recarregar os dados.', 'error');
+      if (document.getElementById(`view-${state.view}`)) goTo(state.view);
+      return {ok:false, erro: msg};
     });
   }
 
@@ -1465,9 +1605,11 @@ const App = (function(){
           <div style="margin-top:6px;"><button class="btn btn-primary btn-sm" onclick="App.atualizarAgora()">Tentar novamente</button></div>
         </div>` : `
         <div class="loading-state">
-          <div class="spinner"></div>
-          Buscando dados da planilha "BH - Zukkin"...
-          <div style="margin-top:14px;"><button class="btn btn-primary btn-sm" onclick="App.atualizarAgora()">Tentar novamente</button></div>
+          Nenhuma semana registrada ainda.
+          <div style="font-size:12.5px;color:var(--gray-500);margin-top:8px;max-width:420px;">
+            Importe o relatório de banco de horas da VR Ponto Mais em <b>Configurações</b> para registrar a primeira semana.
+          </div>
+          <div style="margin-top:14px;"><button class="btn btn-primary btn-sm" onclick="App.goTo('config')">Ir para Configurações</button></div>
         </div>`;
       return;
     }
@@ -2079,27 +2221,24 @@ const App = (function(){
       <div class="config-grid">
 
         <div class="panel panel-body">
-          <h3 style="font-size:14px;margin-bottom:14px;">Fonte de dados</h3>
-          <div class="field-row"><label>Planilha do Google Sheets</label><input type="text" disabled value="${cfg.fileTitle}"></div>
-          <div class="field-row"><label>Dia da atualização semanal</label>
-            <select id="cfg-dia">${dias.map((d,i) => `<option value="${i}" ${cfg.diaAtualizacao===i?'selected':''}>${d}</option>`).join('')}</select>
-          </div>
-          <p style="font-size:11.5px;color:var(--gray-500);margin-top:6px;">Os dados são lidos automaticamente direto do Google Sheets (arquivo público por link) a cada vez que o painel é aberto — não é preciso importar nada manualmente.</p>
-          <button class="btn btn-primary btn-sm" id="cfg-salvar-fonte" style="margin-top:10px;">Salvar</button>
-          <div style="margin-top:16px;border-top:1px solid var(--gray-150);padding-top:14px;">
-            <label style="font-size:11.5px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:6px;">Alternativa: importar arquivo manualmente</label>
-            <input type="file" id="cfg-arquivo-manual" accept=".xlsx,.xls">
-            <p style="font-size:11px;color:var(--gray-500);margin-top:6px;">Use isso só se a atualização automática parar de funcionar (ex.: se a planilha deixar de estar pública).</p>
-          </div>
+          <h3 style="font-size:14px;margin-bottom:14px;">Importar banco de horas</h3>
+          <p style="font-size:11.5px;color:var(--gray-500);margin:-4px 0 12px;">Os saldos ficam gravados no banco de dados do sistema. Cada importação registra uma nova semana e <b>preserva</b> todas as anteriores.</p>
+          <div class="field-row"><label>Semana de referência</label><input type="date" id="cfg-import-semana" value="${History.nextScheduledWeek()}"></div>
+          <label style="font-size:11.5px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.3px;display:block;margin:10px 0 6px;">Arquivo do relatório</label>
+          <input type="file" id="cfg-arquivo-manual" accept=".xlsx,.xls">
+          <p style="font-size:11px;color:var(--gray-500);margin-top:6px;">Na VR Ponto Mais: <b>Relatórios → Banco de horas (período)</b> → escolha a data → <b>Baixar</b> em Excel. Colaboradores não cadastrados são ignorados e listados como aviso.</p>
+          <div id="cfg-import-feedback" style="margin-top:12px;">${state.cfgFeedback ? `<div class="banner banner-${state.cfgFeedback.tipo}">${state.cfgFeedback.html}</div>` : ''}</div>
         </div>
 
         <div class="panel panel-body">
           <h3 style="font-size:14px;margin-bottom:14px;">Atualização</h3>
-          <div class="field-row"><label>Última atualização</label><input type="text" disabled value="Semana ${Report.formatSemana(History.currentWeek())}"></div>
-          <div class="field-row"><label>Próxima atualização prevista</label><input type="text" disabled value="Semana ${Report.formatSemana(History.nextScheduledWeek())}"></div>
-          <div class="field-row"><label>Status da última leitura</label><input type="text" disabled id="cfg-status-import" value="${Import.getStatus()}"></div>
-          <button class="btn btn-red btn-sm" id="cfg-atualizar-manual" style="margin-top:6px;">Atualizar agora</button>
-          <div id="cfg-import-feedback" style="margin-top:12px;">${state.cfgFeedback ? `<div class="banner banner-${state.cfgFeedback.tipo}">${state.cfgFeedback.html}</div>` : ''}</div>
+          <div class="field-row"><label>Dia da semana de referência</label>
+            <select id="cfg-dia">${dias.map((d,i) => `<option value="${i}" ${cfg.diaAtualizacao===i?'selected':''}>${d}</option>`).join('')}</select>
+          </div>
+          <div class="field-row"><label>Última semana registrada</label><input type="text" disabled value="${History.listWeeks().length ? 'Semana ' + Report.formatSemana(History.currentWeek()) : 'nenhuma'}"></div>
+          <div class="field-row"><label>Próxima semana prevista</label><input type="text" disabled value="Semana ${Report.formatSemana(History.nextScheduledWeek())}"></div>
+          <button class="btn btn-primary btn-sm" id="cfg-salvar-fonte" style="margin-top:6px;">Salvar</button>
+          <button class="btn btn-outline btn-sm" id="cfg-atualizar-manual" style="margin-top:6px;">Recarregar do banco</button>
         </div>
 
         <div class="panel panel-body">
@@ -2135,6 +2274,44 @@ const App = (function(){
         </div>
 
         <div class="panel panel-body" style="grid-column:1 / -1;">
+          <h3 style="font-size:14px;margin-bottom:4px;">Colaboradores</h3>
+          <p style="font-size:11.5px;color:var(--gray-500);margin-bottom:14px;">O nome precisa ser <b>igual</b> ao que aparece na VR Ponto Mais para que a importação reconheça a pessoa. Remover um colaborador apaga também o histórico dele.</p>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;padding:12px;background:var(--gray-50);border-radius:8px;">
+            <div style="flex:1;min-width:220px;">
+              <label style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;display:block;margin-bottom:4px;">Nome completo</label>
+              <input type="text" id="cfg-novo-nome" placeholder="Como aparece na VR Ponto Mais">
+            </div>
+            <div style="min-width:150px;">
+              <label style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;display:block;margin-bottom:4px;">Setor</label>
+              <select id="cfg-novo-setor">${Data.SETORES.map(s=>`<option value="${s}">${s}</option>`).join('')}</select>
+            </div>
+            <div style="min-width:140px;">
+              <label style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;display:block;margin-bottom:4px;">Cargo (opcional)</label>
+              <input type="text" id="cfg-novo-cargo" placeholder="—">
+            </div>
+            <button class="btn btn-primary btn-sm" id="cfg-add-colab">Adicionar</button>
+          </div>
+
+          <table class="data-table">
+            <thead><tr><th>Colaborador</th><th>Setor</th><th>Cargo</th><th style="text-align:right;">Ação</th></tr></thead>
+            <tbody>
+              ${Data.COLABORADORES.length ? Data.COLABORADORES.slice().sort((a,b)=> (a.setor+a.nome).localeCompare(b.setor+b.nome)).map(c => `
+                <tr>
+                  <td>${c.nome}</td>
+                  <td>
+                    <select data-mover="${c.id}" style="font-size:12px;padding:4px 6px;">
+                      ${Data.SETORES.map(s=>`<option value="${s}" ${s===c.setor?'selected':''}>${s}</option>`).join('')}
+                    </select>
+                  </td>
+                  <td>${c.cargo || '—'}</td>
+                  <td style="text-align:right;"><button class="btn btn-outline btn-sm" data-remover="${c.id}">Remover</button></td>
+                </tr>`).join('') : '<tr><td colspan="4" style="color:var(--gray-500);">Nenhum colaborador cadastrado.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panel panel-body" style="grid-column:1 / -1;">
           <h3 style="font-size:14px;margin-bottom:14px;">Histórico de semanas</h3>
           <p style="font-size:12.5px;color:var(--gray-600);margin-bottom:10px;">O sistema preserva permanentemente todas as semanas já registradas — nenhuma atualização apaga ou sobrescreve dados anteriores.</p>
           <div class="filters">
@@ -2154,9 +2331,10 @@ const App = (function(){
     document.getElementById('cfg-arquivo-manual').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
+      const semanaEscolhida = document.getElementById('cfg-import-semana').value;
       const fb = document.getElementById('cfg-import-feedback');
       fb.innerHTML = `<div class="banner banner-info"><div class="spinner" style="width:14px;height:14px;margin:0;"></div> Lendo o arquivo selecionado...</div>`;
-      Import.atualizarDeArquivo(file).then(res => {
+      Import.atualizarDeArquivo(file, semanaEscolhida).then(res => {
         if (res.ok){
           state.cfgFeedback = {tipo:'info', html:`Importação concluída — semana ${Report.formatSemana(res.semana)}.${res.avisos && res.avisos.length ? ' ' + res.avisos.length + ' aviso(s): ' + res.avisos.slice(0,5).join(' · ') : ''}`};
           state.semanaSelecionada = History.currentWeek();
@@ -2165,6 +2343,40 @@ const App = (function(){
         } else {
           state.cfgFeedback = {tipo:'warn', html:`Erro na importação: ${res.erro}`};
         }
+        renderConfig();
+      });
+    });
+
+    document.getElementById('cfg-add-colab').addEventListener('click', () => {
+      const nome = document.getElementById('cfg-novo-nome').value.trim();
+      const setor = document.getElementById('cfg-novo-setor').value;
+      const cargo = document.getElementById('cfg-novo-cargo').value.trim();
+      if (!nome){ toast('Informe o nome do colaborador.', 'error'); return; }
+      const r = Data.adicionarColaborador(nome, setor, cargo);
+      if (!r.ok){ toast(r.mensagem, 'error'); return; }
+      toast(`${nome} adicionado em ${setor}.`, 'success');
+      renderConfig();
+    });
+
+    el.querySelectorAll('[data-remover]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-remover');
+        const c = Data.COLABORADORES.find(x => x.id === id);
+        if (!c) return;
+        if (!confirm(`Remover ${c.nome} do sistema?\n\nO histórico de banco de horas dessa pessoa também será apagado. Esta ação não pode ser desfeita.`)) return;
+        Data.removerColaborador(id);
+        toast(`${c.nome} removido.`, 'success');
+        renderConfig();
+      });
+    });
+
+    el.querySelectorAll('[data-mover]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const id = sel.getAttribute('data-mover');
+        const c = Data.COLABORADORES.find(x => x.id === id);
+        if (!c) return;
+        Data.moverColaborador(id, sel.value);
+        toast(`${c.nome} movido para ${sel.value}.`, 'success');
         renderConfig();
       });
     });
@@ -2178,15 +2390,10 @@ const App = (function(){
     });
 
     document.getElementById('cfg-atualizar-manual').addEventListener('click', () => {
-      const fb = document.getElementById('cfg-import-feedback');
-      fb.innerHTML = `<div class="banner banner-info"><div class="spinner" style="width:14px;height:14px;margin:0;"></div> Lendo a planilha...</div>`;
-      document.getElementById('cfg-status-import').value = 'loading';
       atualizarAgora().then(res => {
-        if (res.ok){
-          state.cfgFeedback = {tipo:'info', html:`Atualização concluída — semana ${Report.formatSemana(res.semana)}. O dashboard e os setores já refletem os novos dados.${res.avisos && res.avisos.length ? ' ' + res.avisos.length + ' aviso(s): ' + res.avisos.slice(0,5).join(' · ') : ''}`};
-        } else {
-          state.cfgFeedback = {tipo:'warn', html:`Erro na atualização: ${res.erro}`};
-        }
+        state.cfgFeedback = res.ok
+          ? {tipo:'info', html:'Dados recarregados do banco de dados.'}
+          : {tipo:'warn', html:`Erro ao recarregar: ${res.erro}`};
         renderConfig();
       });
     });
@@ -2296,8 +2503,6 @@ const App = (function(){
     wireGlobalWeekSelect();
     updateTopbarMeta();
     goTo('dashboard');
-
-    atualizarAgora();
   }
 
   return { goTo, openColaborador, closeModal, imprimirRelatorio, atualizarAgora, init };
