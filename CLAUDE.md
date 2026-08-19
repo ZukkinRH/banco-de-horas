@@ -24,33 +24,59 @@ escolha de arquivo único foi deliberada, para manter o deploy trivial.
 ## 2. Como os dados entram e saem
 
 ```
-Planilha Google Sheets  ──(export xlsx, lido no navegador com SheetJS)──►  index.html
-                                                                              │
-                                       estado salvo ◄──── Firebase Firestore ─┤
-                                                                              │
-                             POST fire-and-forget ──► Google Apps Script ──► Gmail ──► gestores
+VR Ponto Mais ──(relatório .xlsx importado em Configurações)──►  index.html
+                                                                     │
+                                    fonte da verdade ◄──── Firebase Firestore
+                                                                     │
+                        POST fire-and-forget ──► Google Apps Script ──► Gmail ──► gestores
 ```
 
-1. **Origem dos dados**: uma planilha do Google Sheets pública por link, lida
-   automaticamente toda vez que o painel abre. O RH mantém essa planilha; o painel
-   apenas lê. Não há escrita de volta na planilha pelo site.
-2. **Persistência**: Firebase Firestore guarda o estado do app (e-mails de gestores,
-   configurações, histórico de semanas importadas) num documento único.
+1. **Origem dos dados**: o relatório "Banco de horas (período)" exportado da VR Ponto
+   Mais, importado pelo painel em Configurações. O arquivo traz `Nome` e `Saldo BH`,
+   **sem setor** — o setor vem do cadastro de colaboradores do próprio sistema, casado
+   pelo nome (normalizado, ignorando acentos e espaços extras).
+2. **Persistência**: o Firestore é a **fonte da verdade**. Guarda colaboradores, setores,
+   histórico de saldos por semana, e-mails dos gestores e configurações.
 3. **Envio de e-mail**: um Web App do Google Apps Script recebe um POST com o payload
    do relatório e dispara o e-mail via `GmailApp`.
+
+> **A planilha do Google Sheets saiu de cena** (decisão do Rodrigo, agosto/2026). Antes
+> ela era a fonte e o painel a relia a cada carregamento, o que sobrescrevia qualquer
+> dado gravado. Hoje o sistema é a plataforma de trabalho, não um espelho da planilha.
+> A função `Import.atualizarDaPlanilha()` ainda existe no código mas **não é exportada
+> nem chamada** — deixá-la voltar a rodar apagaria os dados do banco.
 
 ### Identificadores reais (já em produção)
 
 | O quê | Valor |
 |---|---|
-| Google Sheets `fileId` | `14jGeC75wE64upU4rvOrI75zZoQi3AhSxtZEgyT1Muwk` (título "BH - Zukkin") |
 | Firebase project | `zukkin-banco-de-horas` (região São Paulo) |
 | Documento do Firestore | coleção `estado`, documento `main` |
 | Apps Script — projeto | `1MvDDSTLKa4fS-SDDZR7rvre92zD2pfEWoFxU1hvb5obVhS5PLN54CIyQ` |
 | Apps Script — URL do Web App | `https://script.google.com/macros/s/AKfycbzewCkowYfB1stBueYUGC7Y8EQXobZSGonAKpIIJG0k8srB5HlZ_cCRy1p9UJdVn3EZ/exec` |
+| VR Ponto Mais | `https://app2.pontomais.com.br` → Relatórios → Banco de horas (período) |
+| Google Sheets (legado) | `14jGeC75wE64upU4rvOrI75zZoQi3AhSxtZEgyT1Muwk` — só histórico, não é mais lido |
 
 A URL do Apps Script **não** fica hardcoded no código: o Rodrigo cola ela em
-Configurações → "URL do fluxo HTTP", e ela é persistida no Firestore.
+Configurações → "URL do serviço de envio", e ela é persistida no Firestore.
+
+### Escrever no Firestore sem navegador
+
+É possível ler e gravar o estado direto pela REST API, o que permite alimentar o
+sistema de fora do navegador (usado para a carga semanal):
+
+```bash
+# 1) token anônimo
+curl -s -X POST "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=AIzaSyDKGEnRQGnGytmxvgeDnR2UygKICUA1kIQ" \
+  -H "Content-Type: application/json" -d '{"returnSecureToken":true}'
+# 2) ler / gravar (PATCH) o documento
+curl -s "https://firestore.googleapis.com/v1/projects/zukkin-banco-de-horas/databases/(default)/documents/estado/main" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Ao gravar, os valores numéricos vão como `doubleValue`, **exceto**
+`sourceConfig.diaAtualizacao`, que precisa continuar `integerValue`. Saldos são
+armazenados em **horas decimais** (ex.: `-0.5167` = `-00h31`), não em texto.
 
 ## 3. Arquitetura interna do `index.html`
 
@@ -74,27 +100,31 @@ E-mails, Configurações.
 Zpromo, Zrobot. Estão hardcoded em `Data.SETORES`. Já houve um bug de assumir um
 setor "Produtos" que não existe — não invente setores.
 
-### Formato da planilha (o parser depende disso)
+### Formato do arquivo da VR Ponto Mais (o parser depende disso)
 
-A planilha **não** é uma tabela única. São mini-tabelas empilhadas e às vezes lado a
-lado, uma por setor:
+Tabela única, com um cabeçalho a partir da 4ª linha:
 
 ```
-Banco de Horas - Qualidade          Banco de Horas - Zpromo
-Colaborador | Cargo | Saldo Atual   Colaborador | Saldo Atual
-Fulano      | ...   | 01:46         Beltrano    | 00:23
-Sicrano     | ...   | -00:12        (bloco pode acabar antes do outro)
-(termina na primeira linha em branco)
+Relatório de Banco de horas (período) Por Rodrigo Petrin Higino em ...
+De 18/08/2026 até 18/08/2026
+
+Nome | saldo inicial | total de horas positivas | total de horas negativas | Saldo BH | H.E. 1..4
+Arthur Martins Coimbra | -00:01 | 00:00 | 00:30 | -00:31 | ...
+...
+Totais | ...                      ← o parser PARA aqui
 ```
 
-O parser (`Import`) localiza cada bloco pelo título `Banco de Horas - <Setor>`, lê a
-linha de cabeçalho seguinte e consome linhas até a primeira em branco. Blocos lado a
-lado de tamanhos diferentes são suportados.
+`parsePontoMais` procura em qualquer linha as colunas `Nome` (ou `Colaborador`) e
+`Saldo BH` (ou `Saldo Atual`/`Saldo`), e lê até a linha `Totais`. Só usa **Nome** e
+**Saldo BH** — as demais colunas são ignoradas.
 
-A planilha só traz o **saldo atual**. O sistema deriva o resto: saldo anterior = último
-saldo conhecido daquele colaborador; gestor = gestor cadastrado do setor. A "Data Base"
-que aparece em alguns blocos é **ignorada de propósito** (fica inconsistente entre
-setores) — a semana de referência vem da escolha do usuário.
+`aplicarPorNome` casa cada nome com o cadastro do sistema. Quem **não** estiver
+cadastrado é ignorado e reportado como aviso — nunca se cria colaborador
+automaticamente, porque o arquivo não diz o setor. O saldo anterior sai do último
+saldo conhecido daquela pessoa; o gestor, do gestor cadastrado do setor.
+
+Se o arquivo não bater com esse formato, o parser cai no formato antigo de blocos
+`Banco de Horas - <Setor>` (a planilha legada), que continua suportado.
 
 ## 4. Armadilhas conhecidas (leia antes de mexer)
 
@@ -156,23 +186,30 @@ curl -s https://zukkinrh.github.io/banco-de-horas/ | grep -c "no-cors"
 
 Toda segunda-feira:
 
-1. Extrai-se o relatório "Banco de horas (período)" da plataforma **VR Ponto Mais**
-   (`app2.pontomais.com.br` → Relatórios). Ele traz `Nome` e `Saldo BH` por colaborador.
-2. Esses saldos alimentam a planilha do Google Sheets.
-3. O painel lê a planilha automaticamente ao abrir.
-4. O Rodrigo revisa em "Relatórios" e clica em "Enviar relatório de \<Setor\>" para cada
+1. Extrai-se o relatório "Banco de horas (período)" da **VR Ponto Mais**
+   (`app2.pontomais.com.br` → Relatórios → escolher a data → Gerar/Baixar).
+   O relatório do dia corrente costuma vir vazio — use o último dia fechado.
+2. Os saldos entram no sistema: pelo painel (Configurações → Importar banco de horas)
+   ou gravados direto no Firestore pela REST API (ver seção 2).
+3. O Rodrigo revisa em "Relatórios" e clica em "Enviar relatório de \<Setor\>" para cada
    setor, confirmando cada envio.
 
 Os passos 1–2 e o aviso do passo 3 estão automatizados como tarefas agendadas no Cowork
 (`vr-pontomais-extracao-semanal` às 8h05 e `banco-de-horas-aviso-semanal` às 9h de
 segunda) — **fora deste repositório**. Claude Code não controla navegador; se a tarefa
-envolver VR Ponto Mais, Firebase Console ou Google Sheets pela interface, oriente o
-Rodrigo a fazer no Cowork.
+envolver VR Ponto Mais ou Firebase Console pela interface, oriente o Rodrigo a fazer no
+Cowork.
 
 ## 7. Pendências conhecidas
 
 - Cadastrar os e-mails reais dos gestores dos 7 setores na tela "E-mails" (hoje vazios)
   e só então desligar o Modo de teste.
+- Três pessoas aparecem na VR Ponto Mais sem cadastro no sistema, aguardando o Rodrigo
+  informar o setor: **Isabelle Paulino Silva**, **Marcelly Santini Lima de Melo** e
+  **Mariana Castanheira Carraba Paiva**. Cadastrar em Configurações → Colaboradores.
+- **Raphael Borba De Lima** (Desenvolvimento) aparece com saldo de -56h na VR Ponto
+  Mais contra -00h01 no histórico. O valor foi deixado de fora a pedido do Rodrigo até
+  ele conferir se procede.
 - Existe um fluxo órfão no Power Automate ("Http -> Criar Tabela HTML,Enviar um email
   (V2)") que ficou inutilizável por falta de licença. Não é usado por nada; pode ser
   apagado pelo Rodrigo.
