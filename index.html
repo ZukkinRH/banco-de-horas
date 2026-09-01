@@ -705,24 +705,20 @@ const Calc = (function(){
 
   function calcSituacao(saldo){
     if (Math.abs(saldo) < LIMIAR_ZERO) return 'Zerado';
-    if (saldo > LIMIAR_ATENCAO) return 'Positivo';
-    if (saldo < -LIMIAR_ATENCAO) return 'Negativo';
-    return 'Atenção';
+    return saldo > 0 ? 'Positivo' : 'Negativo';
   }
 
   function calcClassificacao(saldo){
     const sit = calcSituacao(saldo);
-    if (sit === 'Positivo') return {label:'Situação favorável', tom:'positivo'};
-    if (sit === 'Negativo') return {label: saldo <= -LIMIAR_POSITIVO_ALTO*0.4 ? 'Atenção prioritária' : 'Atenção', tom:'negativo'};
-    if (sit === 'Atenção') return {label:'Atenção', tom:'atencao'};
-    return {label:'Banco zerado', tom:'zerado'};
+    if (sit === 'Positivo') return {label:'Positivo', tom:'positivo'};
+    if (sit === 'Negativo') return {label:'Negativo', tom:'negativo'};
+    return {label:'Zerado', tom:'zerado'};
   }
 
   function badgeClass(situacao){
     switch(situacao){
       case 'Positivo': return 'badge-positivo';
       case 'Negativo': return 'badge-negativo';
-      case 'Atenção':  return 'badge-atencao';
       default: return 'badge-zerado';
     }
   }
@@ -753,8 +749,11 @@ const Calc = (function(){
       const sit = semanaData.situacao;
       if (sit === 'Positivo') qtdPositivo++;
       else if (sit === 'Negativo') qtdNegativo++;
-      else if (sit === 'Atenção') qtdAtencao++;
       else qtdZerado++;
+      // "Precisam de atenção" é um recorte à parte (saldo perto de zero,
+      // dentro da faixa de +-2h) — independente do rótulo Positivo/Negativo
+      // do badge, que agora é só o sinal do saldo.
+      if (Math.abs(saldo) >= LIMIAR_ZERO && Math.abs(saldo) <= LIMIAR_ATENCAO) qtdAtencao++;
     });
 
     const total = lista.length || 1;
