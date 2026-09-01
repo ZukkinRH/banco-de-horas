@@ -1405,6 +1405,7 @@ const Charts = (function(){
   }
 
   function rankingPositivo(canvasId, nomes, valores){
+    const maxVal = Math.max(0, ...valores);
     render(canvasId, {
       type:'bar',
       data:{ labels:nomes, datasets:[{label:'Saldo (h)', data:valores, backgroundColor:PALETTE.positivo, borderRadius:6}] },
@@ -1415,16 +1416,17 @@ const Charts = (function(){
           datalabels:{
             anchor:'end', align:'end', offset:4, clamp:true,
             color:PALETTE.positivo, font:{size:11, weight:'600', family:'-apple-system, Segoe UI, Roboto'},
-            formatter:(v)=>Calc.formatHoras(v)
+            formatter:(v)=>{ const s=Calc.formatHoras(v); return (v>0 && !s.startsWith('+')) ? '+'+s : s; }
           }
         },
-        scales:{x:{grid:{color:PALETTE.grid}}, y:{grid:{display:false}}}
+        scales:{x:{suggestedMax:maxVal*1.2, grid:{color:PALETTE.grid}}, y:{grid:{display:false}}}
       },
       plugins:(typeof ChartDataLabels!=='undefined') ? [ChartDataLabels] : []
     });
   }
 
   function rankingNegativo(canvasId, nomes, valores){
+    const minVal = Math.min(0, ...valores);
     render(canvasId, {
       type:'bar',
       data:{ labels:nomes, datasets:[{label:'Saldo (h)', data:valores, backgroundColor:PALETTE.negativo, borderRadius:6}] },
@@ -1433,12 +1435,12 @@ const Charts = (function(){
         plugins:{
           legend:{display:false},
           datalabels:{
-            anchor:'end', align:'end', offset:4, clamp:true,
+            anchor:'start', align:'start', offset:4, clamp:true,
             color:PALETTE.negativo, font:{size:11, weight:'600', family:'-apple-system, Segoe UI, Roboto'},
-            formatter:(v)=>Calc.formatHoras(v)
+            formatter:(v)=>{ const s=Calc.formatHoras(v); return (v<0 && !s.startsWith('-')) ? '-'+s : s; }
           }
         },
-        scales:{x:{grid:{color:PALETTE.grid}}, y:{grid:{display:false}}}
+        scales:{x:{suggestedMin:minVal*1.45, grid:{color:PALETTE.grid}}, y:{grid:{display:false}}}
       },
       plugins:(typeof ChartDataLabels!=='undefined') ? [ChartDataLabels] : []
     });
