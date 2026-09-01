@@ -520,6 +520,12 @@ const Data = (function(){
   const EMAIL_CONFIG = {};
   SETORES.forEach(s => { EMAIL_CONFIG[s] = {gestorNome:'', gestorEmail:'', adicionais:[]}; });
 
+  // Relatório executivo mensal — só os 2 diretores, isolado dos e-mails
+  // por setor acima. Cadastro fica em E-mails → Diretoria.
+  const DIRETORIA_CONFIG = {
+    diretores: [ {nome:'', email:''}, {nome:'', email:''} ]
+  };
+
   let COLABORADORES = [];
   let SEMANAS = [];
 
@@ -549,6 +555,7 @@ const Data = (function(){
         colaboradores: COLABORADORES,
         semanas: SEMANAS,
         emailConfig: EMAIL_CONFIG,
+        diretoriaConfig: DIRETORIA_CONFIG,
         gestores: GESTORES,
         sourceConfig: SOURCE_CONFIG,
         appConfig: APP_CONFIG,
@@ -567,6 +574,7 @@ const Data = (function(){
       if (Array.isArray(saved.colaboradores)) COLABORADORES = saved.colaboradores;
       if (Array.isArray(saved.semanas)) SEMANAS = saved.semanas;
       if (saved.emailConfig) Object.assign(EMAIL_CONFIG, saved.emailConfig);
+      if (saved.diretoriaConfig && Array.isArray(saved.diretoriaConfig.diretores)) DIRETORIA_CONFIG.diretores = saved.diretoriaConfig.diretores;
       if (saved.gestores) Object.assign(GESTORES, saved.gestores);
       if (saved.sourceConfig) Object.assign(SOURCE_CONFIG, saved.sourceConfig);
       if (saved.appConfig) Object.assign(APP_CONFIG, saved.appConfig);
@@ -661,7 +669,7 @@ const Data = (function(){
   }
 
   return {
-    SETORES, GESTORES, EMAIL_CONFIG, SOURCE_CONFIG, APP_CONFIG,
+    SETORES, GESTORES, EMAIL_CONFIG, DIRETORIA_CONFIG, SOURCE_CONFIG, APP_CONFIG,
     get COLABORADORES(){ return COLABORADORES; },
     get SEMANAS(){ return SEMANAS; },
     persist, carregarAsync, slug, aplicarImportacao,
@@ -1226,6 +1234,26 @@ const Report = (function(){
     };
   }
 
+  // Visão executiva da empresa inteira — usada só no relatório mensal da
+  // Diretoria. Isolada de buildSectorReport: não filtra por setor.
+  function buildExecutiveReport(semana){
+    const todos = Data.COLABORADORES;
+    const semanaAnterior = History.previousWeek(semana);
+    const resumoGeral = Calc.aggregateLista(todos, semana);
+    const porSetor = Data.SETORES.map(setor => ({
+      setor,
+      resumo: Calc.aggregateSetor(todos, setor, semana)
+    }));
+    const maioresPositivos = Calc.ranking(todos, semana, {ordem:'desc', limite:10})
+      .filter(r => r.saldo > 0)
+      .map(r => ({ nome: r.colaborador.nome, setor: r.colaborador.setor, cargo: r.colaborador.cargo || '', saldo: r.saldo }));
+    const maioresNegativos = Calc.ranking(todos, semana, {ordem:'asc', limite:10})
+      .filter(r => r.saldo < 0)
+      .map(r => ({ nome: r.colaborador.nome, setor: r.colaborador.setor, cargo: r.colaborador.cargo || '', saldo: r.saldo }));
+
+    return { semana, semanaAnterior, resumoGeral, porSetor, maioresPositivos, maioresNegativos };
+  }
+
   function renderReportHTML(reportData){
     const {setor, semana, resumo, tabela, pontosDeAtencao, gestor} = reportData;
     const linhas = tabela.map(l => `
@@ -1303,7 +1331,7 @@ const Report = (function(){
     URL.revokeObjectURL(url);
   }
 
-  return { buildSectorReport, renderReportHTML, formatSemana, exportSectorCSV };
+  return { buildSectorReport, buildExecutiveReport, renderReportHTML, formatSemana, exportSectorCSV };
 })();
 </script>
 
@@ -1344,6 +1372,10 @@ const EmailModule = (function(){
     return [cfg.gestorEmail, ...cfg.adicionais].filter(Boolean);
   }
 
+  function getDestinatariosDiretoria(){
+    return Data.DIRETORIA_CONFIG.diretores.map(d => d.email).filter(Boolean);
+  }
+
   function enviarRelatorioSetor(setor, semana){
     const reportData = Report.buildSectorReport(setor, semana);
     const modoTeste = !!Data.APP_CONFIG.modoTeste;
@@ -1364,6 +1396,33 @@ const EmailModule = (function(){
     return _endpointEnvioRelatorio(payload);
   }
 
+  // Envio exclusivo da Diretoria — relatório executivo da empresa inteira.
+  // Isolado de enviarRelatorioSetor: não usa Data.EMAIL_CONFIG nem entra
+  // no envio em lote dos 7 setores.
+  function enviarRelatorioDiretoria(semana){
+    const reportData = Report.buildExecutiveReport(semana);
+    const modoTeste = !!Data.APP_CONFIG.modoTeste;
+    const destinatarios = modoTeste ? [Data.APP_CONFIG.emailTeste].filter(Boolean) : getDestinatariosDiretoria();
+    if (!destinatarios.length){
+      return Promise.reject({ok:false, mensagem: modoTeste
+        ? 'Cadastre um e-mail de teste em Configurações antes de usar o Modo de teste.'
+        : 'Cadastre o e-mail dos diretores em E-mails → Diretoria antes de enviar.'});
+    }
+    const payload = {
+      tipo: 'diretoria',
+      setor: (modoTeste ? '[TESTE] ' : '') + 'Diretoria — Visão executiva',
+      semana,
+      modoTeste,
+      destinatarios,
+      geradoEm: new Date().toISOString(),
+      resumoGeral: reportData.resumoGeral,
+      porSetor: reportData.porSetor.map(s => ({ setor: s.setor, resumo: s.resumo })),
+      maioresPositivos: reportData.maioresPositivos,
+      maioresNegativos: reportData.maioresNegativos
+    };
+    return _endpointEnvioRelatorio(payload);
+  }
+
   function updateConfig(setor, {gestorNome, gestorEmail, adicionais}){
     const cfg = Data.EMAIL_CONFIG[setor];
     if (!cfg) return;
@@ -1373,7 +1432,15 @@ const EmailModule = (function(){
     Data.persist();
   }
 
-  return { enviarRelatorioSetor, getDestinatarios, updateConfig };
+  function updateDiretoriaConfig(indice, {nome, email}){
+    const d = Data.DIRETORIA_CONFIG.diretores[indice];
+    if (!d) return;
+    if (nome !== undefined) d.nome = nome;
+    if (email !== undefined) d.email = email;
+    Data.persist();
+  }
+
+  return { enviarRelatorioSetor, getDestinatarios, updateConfig, enviarRelatorioDiretoria, getDestinatariosDiretoria, updateDiretoriaConfig };
 })();
 </script>
 
@@ -2108,7 +2175,24 @@ const App = (function(){
       return;
     }
 
+    const diretoriaDestinatarios = Data.APP_CONFIG.modoTeste
+      ? [Data.APP_CONFIG.emailTeste].filter(Boolean)
+      : EmailModule.getDestinatariosDiretoria();
+
     el.innerHTML = `
+      <div class="panel" style="margin-bottom:26px;border-color:var(--gray-300);">
+        <div class="panel-head">
+          <h3>Relatório executivo mensal — Diretoria</h3>
+          <span class="hint">Semana ${Report.formatSemana(semana)}</span>
+        </div>
+        <div class="panel-body">
+          <div class="banner banner-info" style="margin-bottom:12px;">E-mail único e separado dos relatórios por setor abaixo: visão executiva da empresa inteira (todos os setores), só para os 2 diretores. Não faz parte do "Enviar todos os relatórios" nem usa os e-mails de setor.</div>
+          ${!diretoriaDestinatarios.length ? `<div class="report-note" style="margin-bottom:12px;">Cadastre o e-mail dos diretores em <b>E-mails → Diretoria</b> antes de enviar.</div>` : ''}
+          <button class="btn btn-primary" id="btn-enviar-diretoria" ${diretoriaDestinatarios.length ? '' : 'disabled'}>Enviar relatório executivo (Diretoria)</button>
+          <div id="envio-status-diretoria" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
       <div class="banner banner-info">Cada relatório é gerado e enviado de forma isolada por setor — o e-mail de um setor nunca contém dados de outro. O conteúdo enviado traz só o que existe na planilha (colaborador, cargo, saldo atual). Nenhum envio acontece automaticamente: ao clicar em "Enviar relatório", uma tela de confirmação mostra os destinatários e o conteúdo antes de enviar de fato.</div>
       ${Data.APP_CONFIG.modoTeste ? `<div class="banner banner-warn"><b>Modo de teste ativo</b> — os envios abaixo vão para ${Data.APP_CONFIG.emailTeste || '(cadastre um e-mail de teste em Configurações)'}, não para o gestor real.</div>` : ''}
       <div class="subtabs">
@@ -2139,6 +2223,8 @@ const App = (function(){
     }));
     const btnEnviarTodos = document.getElementById('btn-enviar-todos');
     if (btnEnviarTodos) btnEnviarTodos.addEventListener('click', abrirConfirmacaoEnvioTodos);
+    const btnEnviarDiretoria = document.getElementById('btn-enviar-diretoria');
+    if (btnEnviarDiretoria) btnEnviarDiretoria.addEventListener('click', abrirConfirmacaoEnvioDiretoria);
 
     renderRelatorioPreview(setor, semana);
   }
@@ -2332,6 +2418,90 @@ const App = (function(){
     });
   }
 
+  // Relatório executivo da Diretoria: mesma regra de confirmação manual,
+  // mas totalmente isolado do envio por setor — outro botão, outro status,
+  // outra lista de destinatários (Data.DIRETORIA_CONFIG, não EMAIL_CONFIG).
+  function abrirConfirmacaoEnvioDiretoria(){
+    const semana = state.semanaSelecionada;
+    const modoTeste = !!Data.APP_CONFIG.modoTeste;
+    const destinatarios = modoTeste ? [Data.APP_CONFIG.emailTeste].filter(Boolean) : EmailModule.getDestinatariosDiretoria();
+    const rep = Report.buildExecutiveReport(semana);
+
+    const box = document.getElementById('modal-box');
+    box.innerHTML = `
+      <div class="modal-head">
+        <div>
+          <h2>Confirmar envio — Relatório executivo (Diretoria)</h2>
+          <div class="sub">Semana ${Report.formatSemana(semana)} · e-mail único, separado dos relatórios por setor · nada é enviado antes desta confirmação</div>
+        </div>
+        <button class="modal-close" id="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        ${modoTeste ? `<div class="banner banner-warn">Modo de teste ativo — este e-mail vai para o seu e-mail de teste, não para os diretores reais.</div>` : ''}
+        <div class="banner banner-info">
+          <div>
+            <b>Destinatários (${destinatarios.length}):</b>
+            ${destinatarios.length ? destinatarios.map(e => `<div>• ${e}</div>`).join('') : '<div>Nenhum e-mail cadastrado — cadastre em <b>E-mails → Diretoria</b> antes de enviar.</div>'}
+          </div>
+        </div>
+        <h3 style="font-size:13px;margin:14px 0 8px;">Resumo geral da empresa</h3>
+        <div class="grid grid-cards" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px;">
+          <div class="card"><h3>Colaboradores</h3><div class="kpi" style="font-size:19px;">${rep.resumoGeral.totalColaboradores}</div></div>
+          <div class="card accent-green"><h3>Saldo positivo</h3><div class="kpi" style="font-size:19px;">${Calc.formatHoras(rep.resumoGeral.saldoPositivoTotal)}</div></div>
+          <div class="card accent-red"><h3>Saldo negativo</h3><div class="kpi" style="font-size:19px;">${Calc.formatHoras(rep.resumoGeral.saldoNegativoTotal)}</div></div>
+          <div class="card"><h3>Saldo geral</h3><div class="kpi" style="font-size:19px;">${Calc.formatHoras(rep.resumoGeral.saldoGeral)}</div></div>
+        </div>
+        <h3 style="font-size:13px;margin:14px 0 8px;">Saldo por setor</h3>
+        <table class="data-table">
+          <thead><tr><th>Setor</th><th>Colaboradores</th><th>Saldo positivo</th><th>Saldo negativo</th><th>Saldo geral</th></tr></thead>
+          <tbody>
+            ${rep.porSetor.map(s => `<tr><td>${s.setor}</td><td>${s.resumo.totalColaboradores}</td><td>${Calc.formatHoras(s.resumo.saldoPositivoTotal)}</td><td>${Calc.formatHoras(s.resumo.saldoNegativoTotal)}</td><td>${Calc.formatHoras(s.resumo.saldoGeral)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+        <h3 style="font-size:13px;margin:14px 0 8px;">Maiores saldos positivos (todos os setores)</h3>
+        <table class="data-table">
+          <thead><tr><th>Colaborador</th><th>Setor</th><th>Cargo</th><th>Saldo</th></tr></thead>
+          <tbody>
+            ${rep.maioresPositivos.length ? rep.maioresPositivos.map(l => `<tr><td>${l.nome}</td><td>${l.setor}</td><td>${l.cargo || '—'}</td><td>${Calc.formatHoras(l.saldo)}</td></tr>`).join('') : '<tr><td colspan="4">Nenhum saldo positivo nesta semana.</td></tr>'}
+          </tbody>
+        </table>
+        <h3 style="font-size:13px;margin:14px 0 8px;">Maiores saldos negativos (todos os setores)</h3>
+        <table class="data-table">
+          <thead><tr><th>Colaborador</th><th>Setor</th><th>Cargo</th><th>Saldo</th></tr></thead>
+          <tbody>
+            ${rep.maioresNegativos.length ? rep.maioresNegativos.map(l => `<tr><td>${l.nome}</td><td>${l.setor}</td><td>${l.cargo || '—'}</td><td>${Calc.formatHoras(l.saldo)}</td></tr>`).join('') : '<tr><td colspan="4">Nenhum saldo negativo nesta semana.</td></tr>'}
+          </tbody>
+        </table>
+        <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end;">
+          <button class="btn btn-outline" id="btn-cancelar-envio">Cancelar</button>
+          <button class="btn btn-primary" id="btn-confirmar-envio" ${destinatarios.length ? '' : 'disabled'}>Confirmar e enviar</button>
+        </div>
+      </div>
+    `;
+    document.getElementById('modal-overlay').classList.add('open');
+    document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+    document.getElementById('btn-cancelar-envio').addEventListener('click', closeModal);
+    document.getElementById('btn-confirmar-envio').addEventListener('click', () => {
+      closeModal();
+      enviarDiretoriaConfirmado();
+    });
+  }
+
+  function enviarDiretoriaConfirmado(){
+    const semana = state.semanaSelecionada;
+    const status = document.getElementById('envio-status-diretoria');
+    status.innerHTML = `<div class="banner banner-info"><div class="spinner" style="width:14px;height:14px;margin:0;"></div> Enviando relatório executivo...</div>`;
+    EmailModule.enviarRelatorioDiretoria(semana)
+      .then(() => {
+        toast('Relatório executivo enviado à Diretoria.', 'success');
+        status.innerHTML = `<div class="banner banner-info">Envio à Diretoria concluído.</div>`;
+      })
+      .catch((err) => {
+        toast(`Envio à Diretoria pendente: ${err.mensagem || 'falha no envio.'}`, 'error');
+        status.innerHTML = `<div class="banner banner-warn"><b>Relatório executivo não enviado.</b><br>${err.mensagem || 'Configure o serviço de envio em Configurações.'}</div>`;
+      });
+  }
+
   function imprimirRelatorio(setor, semana){
     const rep = Report.buildSectorReport(setor, semana);
     const win = window.open('', '_blank');
@@ -2345,6 +2515,20 @@ const App = (function(){
     const el = document.getElementById('view-emails');
     el.innerHTML = `
       <div class="banner banner-info">Cadastre o gestor e os destinatários adicionais de cada setor. Os relatórios são enviados exclusivamente para os e-mails cadastrados no setor correspondente. Esse cadastro fica salvo no banco de dados (Firestore) — qualquer computador que abrir este painel vê e pode editar os mesmos cadastros.</div>
+
+      <div class="section-title"><h2>Diretoria</h2><span class="hint">relatório executivo mensal — isolado dos setores abaixo</span></div>
+      <div class="email-card" style="margin-bottom:24px;">
+        <div class="grid grid-2">
+          ${Data.DIRETORIA_CONFIG.diretores.map((d, i) => `
+            <div>
+              <div class="field-row"><label>Diretor(a) ${i+1} — nome</label><input type="text" data-diretor-field="nome" data-idx="${i}" value="${d.nome}"></div>
+              <div class="field-row"><label>Diretor(a) ${i+1} — e-mail</label><input type="email" data-diretor-field="email" data-idx="${i}" value="${d.email}"></div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Setores</h2><span class="hint">relatório semanal por setor</span></div>
       <div class="grid grid-2">
         ${Data.SETORES.map(setor => {
           const cfg = Data.EMAIL_CONFIG[setor];
@@ -2372,6 +2556,11 @@ const App = (function(){
       const setor = inp.getAttribute('data-setor');
       EmailModule.updateConfig(setor, {[inp.getAttribute('data-email-field')]: inp.value});
       toast(`Dados de ${setor} atualizados.`, 'success');
+    }));
+    el.querySelectorAll('input[data-diretor-field]').forEach(inp => inp.addEventListener('change', () => {
+      const idx = Number(inp.getAttribute('data-idx'));
+      EmailModule.updateDiretoriaConfig(idx, {[inp.getAttribute('data-diretor-field')]: inp.value});
+      toast(`Diretor(a) ${idx+1} atualizado(a).`, 'success');
     }));
     el.querySelectorAll('[data-add-email]').forEach(btn => btn.addEventListener('click', () => {
       const setor = btn.getAttribute('data-add-email');
