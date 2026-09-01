@@ -2118,7 +2118,11 @@ const App = (function(){
 
       <div id="relatorio-preview"></div>
 
-      <div class="section-title"><h2>Envio individual por setor</h2><span class="hint">Semana ${Report.formatSemana(semana)}</span></div>
+      <div class="section-title"><h2>Envio em lote</h2><span class="hint">Semana ${Report.formatSemana(semana)}</span></div>
+      <div class="banner banner-info">Envia o relatório de todos os setores de uma vez só — cada e-mail continua isolado, com o destinatário e o conteúdo exatos de cada setor, exatamente como no envio individual.</div>
+      <button class="btn btn-red" id="btn-enviar-todos" style="margin-top:10px;">Enviar todos os relatórios (${Data.SETORES.length} setores)</button>
+
+      <div class="section-title" style="margin-top:24px;"><h2>Envio individual por setor</h2><span class="hint">Semana ${Report.formatSemana(semana)}</span></div>
       <div class="grid grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
         ${Data.SETORES.map(s => `
           <button class="btn btn-red btn-sm" style="width:100%;justify-content:center;" data-enviar-setor="${s}">Enviar relatório de ${s}</button>
@@ -2134,6 +2138,8 @@ const App = (function(){
     el.querySelectorAll('[data-enviar-setor]').forEach(btn => btn.addEventListener('click', () => {
       abrirConfirmacaoEnvio(btn.getAttribute('data-enviar-setor'));
     }));
+    const btnEnviarTodos = document.getElementById('btn-enviar-todos');
+    if (btnEnviarTodos) btnEnviarTodos.addEventListener('click', abrirConfirmacaoEnvioTodos);
 
     renderRelatorioPreview(setor, semana);
   }
@@ -2235,6 +2241,96 @@ const App = (function(){
         toast(`Envio de ${setor} pendente: ${err.mensagem || 'falha no envio.'}`, 'error');
         status.innerHTML = `<div class="banner banner-warn"><b>Relatório de ${setor} não enviado.</b><br>${err.mensagem || 'Configure o serviço de envio em Configurações.'}</div>`;
       });
+  }
+
+  // Envio em lote: mesma regra de nunca enviar sem confirmação — mostra os
+  // destinatários de CADA setor antes de disparar, e envia um e-mail por vez,
+  // isolado por setor (nunca mistura colaboradores/destinatários entre setores).
+  function abrirConfirmacaoEnvioTodos(){
+    const semana = state.semanaSelecionada;
+    const modoTeste = !!Data.APP_CONFIG.modoTeste;
+    const linhas = Data.SETORES.map(setor => {
+      const destinatarios = modoTeste ? [Data.APP_CONFIG.emailTeste].filter(Boolean) : EmailModule.getDestinatarios(setor);
+      const rep = Report.buildSectorReport(setor, semana);
+      return { setor, destinatarios, totalColaboradores: rep.resumo.totalColaboradores };
+    });
+    const enviaveis = linhas.filter(l => l.destinatarios.length);
+    const semDestinatario = linhas.filter(l => !l.destinatarios.length);
+
+    const box = document.getElementById('modal-box');
+    box.innerHTML = `
+      <div class="modal-head">
+        <div>
+          <h2>Confirmar envio — Todos os setores</h2>
+          <div class="sub">Semana ${Report.formatSemana(semana)} · ${enviaveis.length} de ${linhas.length} setores serão enviados · nada é enviado antes desta confirmação</div>
+        </div>
+        <button class="modal-close" id="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        ${modoTeste ? `<div class="banner banner-warn">Modo de teste ativo — todos os e-mails abaixo vão para o seu e-mail de teste, não para os gestores reais.</div>` : ''}
+        <div class="banner banner-info">Cada setor recebe seu próprio e-mail, com seus próprios destinatários e sua própria lista de colaboradores. Nenhum dado é misturado entre setores — é o mesmo conteúdo do envio individual, disparado um após o outro.</div>
+        <table class="data-table">
+          <thead><tr><th>Setor</th><th>Colaboradores</th><th>Destinatários</th></tr></thead>
+          <tbody>
+            ${linhas.map(l => `
+              <tr>
+                <td>${l.setor}</td>
+                <td>${l.totalColaboradores}</td>
+                <td>${l.destinatarios.length ? l.destinatarios.map(e => `<div>• ${e}</div>`).join('') : '<span style="color:var(--gray-500);">sem e-mail cadastrado — não será enviado</span>'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ${semDestinatario.length ? `<div class="report-note" style="margin-top:12px;"><b>${semDestinatario.length} setor(es) sem e-mail cadastrado</b> serão pulados: ${semDestinatario.map(l => l.setor).join(', ')}. Cadastre em <b>E-mails</b> para incluí-los no próximo envio.</div>` : ''}
+        <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end;">
+          <button class="btn btn-outline" id="btn-cancelar-envio">Cancelar</button>
+          <button class="btn btn-red" id="btn-confirmar-envio" ${enviaveis.length ? '' : 'disabled'}>Confirmar e enviar (${enviaveis.length})</button>
+        </div>
+      </div>
+    `;
+    document.getElementById('modal-overlay').classList.add('open');
+    document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+    document.getElementById('btn-cancelar-envio').addEventListener('click', closeModal);
+    document.getElementById('btn-confirmar-envio').addEventListener('click', () => {
+      closeModal();
+      enviarTodosConfirmado(enviaveis.map(l => l.setor));
+    });
+  }
+
+  function enviarTodosConfirmado(setores){
+    const semana = state.semanaSelecionada;
+    const status = document.getElementById('envio-status');
+    const resultados = {};
+    setores.forEach(s => { resultados[s] = 'pendente'; });
+
+    function renderStatusLote(){
+      status.innerHTML = `
+        <div class="banner banner-info">
+          <b>Envio em lote — ${setores.length} setor(es)</b>
+          ${setores.map(s => {
+            const r = resultados[s];
+            const marca = r === 'pendente' ? '<div class="spinner" style="width:11px;height:11px;margin:0;display:inline-block;vertical-align:middle;"></div>' : (r === 'ok' ? '✅' : '⚠️');
+            return `<div style="margin-top:4px;">${marca} ${s}${r === 'erro' ? ' — falha no envio' : ''}</div>`;
+          }).join('')}
+        </div>
+      `;
+    }
+    renderStatusLote();
+
+    // envia um setor por vez, sequencialmente, mantendo cada chamada isolada
+    setores.reduce((fila, setor) => fila.then(() =>
+      EmailModule.enviarRelatorioSetor(setor, semana)
+        .then(() => { resultados[setor] = 'ok'; renderStatusLote(); })
+        .catch(() => { resultados[setor] = 'erro'; renderStatusLote(); })
+    ), Promise.resolve()).then(() => {
+      const okCount = Object.values(resultados).filter(r => r === 'ok').length;
+      const erroCount = Object.values(resultados).filter(r => r === 'erro').length;
+      if (erroCount === 0){
+        toast(`${okCount} relatório(s) enviado(s) com sucesso.`, 'success');
+      } else {
+        toast(`${okCount} enviado(s), ${erroCount} com falha — veja o resumo abaixo.`, 'error');
+      }
+    });
   }
 
   function imprimirRelatorio(setor, semana){
