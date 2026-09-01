@@ -7,6 +7,7 @@
 
 <!-- Chart.js (gráficos) -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <!-- SheetJS (lê o .xlsx exportado da planilha do Google Sheets, direto no navegador) -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <!-- Firebase (banco de dados real — Firestore — e autenticação anônima, sem tela de login) -->
@@ -1373,7 +1374,8 @@ const Charts = (function(){
     const merged = {
       type: config.type,
       data: config.data,
-      options: Object.assign({}, BASE_OPTIONS, config.options || {})
+      options: Object.assign({}, BASE_OPTIONS, config.options || {}),
+      plugins: config.plugins || []
     };
     try{
       instances[canvasId] = new Chart(el.getContext('2d'), merged);
@@ -1406,7 +1408,19 @@ const Charts = (function(){
     render(canvasId, {
       type:'bar',
       data:{ labels:nomes, datasets:[{label:'Saldo (h)', data:valores, backgroundColor:PALETTE.positivo, borderRadius:6}] },
-      options:{ indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{grid:{color:PALETTE.grid}}, y:{grid:{display:false}}} }
+      options:{
+        indexAxis:'y',
+        plugins:{
+          legend:{display:false},
+          datalabels:{
+            anchor:'end', align:'end', offset:4, clamp:true,
+            color:PALETTE.positivo, font:{size:11, weight:'600', family:'-apple-system, Segoe UI, Roboto'},
+            formatter:(v)=>Calc.formatHoras(v)
+          }
+        },
+        scales:{x:{grid:{color:PALETTE.grid}}, y:{grid:{display:false}}}
+      },
+      plugins:(typeof ChartDataLabels!=='undefined') ? [ChartDataLabels] : []
     });
   }
 
@@ -1414,7 +1428,19 @@ const Charts = (function(){
     render(canvasId, {
       type:'bar',
       data:{ labels:nomes, datasets:[{label:'Saldo (h)', data:valores, backgroundColor:PALETTE.negativo, borderRadius:6}] },
-      options:{ indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{grid:{color:PALETTE.grid}}, y:{grid:{display:false}}} }
+      options:{
+        indexAxis:'y',
+        plugins:{
+          legend:{display:false},
+          datalabels:{
+            anchor:'end', align:'end', offset:4, clamp:true,
+            color:PALETTE.negativo, font:{size:11, weight:'600', family:'-apple-system, Segoe UI, Roboto'},
+            formatter:(v)=>Calc.formatHoras(v)
+          }
+        },
+        scales:{x:{grid:{color:PALETTE.grid}}, y:{grid:{display:false}}}
+      },
+      plugins:(typeof ChartDataLabels!=='undefined') ? [ChartDataLabels] : []
     });
   }
 
